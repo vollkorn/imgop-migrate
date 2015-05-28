@@ -1,0 +1,355 @@
+Printing analysis 'Scalar Evolution Analysis' for function 'accumulate_1d_addr':
+Classifying expressions for: @accumulate_1d_addr
+  %div = sdiv i32 %w_size, 2
+  -->  %div
+  %sub = sub nsw i32 0, %div
+  -->  (-1 * %div)
+  %0 = sext i32 %sub to i64
+  -->  (sext i32 (-1 * %div) to i64)
+  %1 = sext i32 %div to i64
+  -->  (sext i32 %div to i64)
+  %2 = sext i32 %sub to i64
+  -->  (sext i32 (-1 * %div) to i64)
+  %3 = sext i32 %div to i64
+  -->  (sext i32 %div to i64)
+  %4 = sext i32 %x to i64
+  -->  (sext i32 %x to i64)
+  %5 = sext i32 %rowstride to i64
+  -->  (sext i32 %rowstride to i64)
+  %6 = sext i32 %y to i64
+  -->  (sext i32 %y to i64)
+  %indvars.iv2 = phi i64 [ %indvars.iv.next3, %for.inc8 ], [ %2, %entry ]
+  -->  {(sext i32 (-1 * %div) to i64),+,1}<nsw><%for.cond>		Exits: ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)
+  %acc.0 = phi i32 [ 0, %entry ], [ %acc.1.lcssa, %for.inc8 ]
+  -->  %acc.0		Exits: <<Unknown>>
+  %indvars.iv = phi i64 [ %indvars.iv.next, %for.inc ], [ %0, %for.body ]
+  -->  {(sext i32 (-1 * %div) to i64),+,1}<nsw><%for.cond2>		Exits: ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)
+  %acc.1 = phi i32 [ %acc.0, %for.body ], [ %add7, %for.inc ]
+  -->  %acc.1		Exits: <<Unknown>>
+  %7 = sub nsw i64 %4, %indvars.iv2
+  -->  {((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64))),+,-1}<nw><%for.cond>		Exits: {((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64))),+,-1}<nw><%for.cond>
+  %8 = mul nsw i64 %7, %5
+  -->  {((sext i32 %rowstride to i64) * ((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64)))),+,(-1 * (sext i32 %rowstride to i64))}<%for.cond>		Exits: {((sext i32 %rowstride to i64) * ((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64)))),+,(-1 * (sext i32 %rowstride to i64))}<%for.cond>
+  %9 = add nsw i64 %8, %6
+  -->  {((sext i32 %y to i64) + ((sext i32 %rowstride to i64) * ((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64))))),+,(-1 * (sext i32 %rowstride to i64))}<%for.cond>		Exits: {((sext i32 %y to i64) + ((sext i32 %rowstride to i64) * ((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64))))),+,(-1 * (sext i32 %rowstride to i64))}<%for.cond>
+  %10 = sub nsw i64 %9, %indvars.iv
+  -->  {{((sext i32 %y to i64) + (-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 %rowstride to i64) * ((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64))))),+,(-1 * (sext i32 %rowstride to i64))}<%for.cond>,+,-1}<nw><%for.cond2>		Exits: {((sext i32 %y to i64) + (-1 * ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)) + ((sext i32 %rowstride to i64) * ((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64))))),+,(-1 * (sext i32 %rowstride to i64))}<%for.cond>
+  %arrayidx = getelementptr inbounds i32* %in, i64 %10
+  -->  {{((4 * ((sext i32 %y to i64) + (-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 %rowstride to i64) * ((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64)))))) + %in),+,(-4 * (sext i32 %rowstride to i64))}<%for.cond>,+,-4}<%for.cond2>		Exits: {((4 * (sext i32 %y to i64)) + (-4 * ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)) + (4 * (sext i32 %rowstride to i64) * ((sext i32 %x to i64) + (-1 * (sext i32 (-1 * %div) to i64)))) + %in),+,(-4 * (sext i32 %rowstride to i64))}<%for.cond>
+  %11 = load i32* %arrayidx, align 4
+  -->  %11		Exits: <<Unknown>>
+  %add7 = add nsw i32 %acc.1, %11
+  -->  (%11 + %acc.1)		Exits: <<Unknown>>
+  %indvars.iv.next = add nsw i64 %indvars.iv, 1
+  -->  {(1 + (sext i32 (-1 * %div) to i64)),+,1}<nsw><%for.cond2>		Exits: (1 + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %acc.1.lcssa = phi i32 [ %acc.1, %for.cond2 ]
+  -->  %acc.1.lcssa		Exits: <<Unknown>>
+  %indvars.iv.next3 = add nsw i64 %indvars.iv2, 1
+  -->  {(1 + (sext i32 (-1 * %div) to i64)),+,1}<nsw><%for.cond>		Exits: (1 + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %acc.0.lcssa = phi i32 [ %acc.0, %for.cond ]
+  -->  %acc.0.lcssa
+  %mul11 = mul nsw i32 %x, %rowstride
+  -->  (%x * %rowstride)
+  %add12 = add nsw i32 %mul11, %y
+  -->  ((%x * %rowstride) + %y)
+  %idxprom13 = sext i32 %add12 to i64
+  -->  (sext i32 ((%x * %rowstride) + %y) to i64)
+  %arrayidx14 = getelementptr inbounds i32* %out, i64 %idxprom13
+  -->  ((4 * (sext i32 ((%x * %rowstride) + %y) to i64))<nsw> + %out)<nsw>
+Determining loop execution counts for: @accumulate_1d_addr
+Loop %for.cond2: backedge-taken count is ((-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+Loop %for.cond2: max backedge-taken count is 4294967296
+Loop %for.cond: backedge-taken count is ((-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+Loop %for.cond: max backedge-taken count is 4294967296
+Printing analysis 'Scalar Evolution Analysis' for function 'accumulate_2d_addr':
+Classifying expressions for: @accumulate_2d_addr
+  %div = sdiv i32 %w_size, 2
+  -->  %div
+  %sub = sub nsw i32 0, %div
+  -->  (-1 * %div)
+  %0 = sext i32 %sub to i64
+  -->  (sext i32 (-1 * %div) to i64)
+  %1 = sext i32 %div to i64
+  -->  (sext i32 %div to i64)
+  %2 = sext i32 %x to i64
+  -->  (sext i32 %x to i64)
+  %3 = sext i32 %sub to i64
+  -->  (sext i32 (-1 * %div) to i64)
+  %4 = sext i32 %div to i64
+  -->  (sext i32 %div to i64)
+  %5 = sext i32 %y to i64
+  -->  (sext i32 %y to i64)
+  %indvars.iv2 = phi i64 [ %indvars.iv.next3, %for.inc9 ], [ %3, %entry ]
+  -->  {(sext i32 (-1 * %div) to i64),+,1}<nsw><%for.cond>		Exits: ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)
+  %acc.0 = phi i32 [ 0, %entry ], [ %acc.1.lcssa, %for.inc9 ]
+  -->  %acc.0		Exits: <<Unknown>>
+  %indvars.iv = phi i64 [ %indvars.iv.next, %for.inc ], [ %0, %for.body ]
+  -->  {(sext i32 (-1 * %div) to i64),+,1}<nsw><%for.cond2>		Exits: ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)
+  %acc.1 = phi i32 [ %acc.0, %for.body ], [ %add8, %for.inc ]
+  -->  %acc.1		Exits: <<Unknown>>
+  %6 = add nsw i64 %2, %indvars.iv
+  -->  {((sext i32 (-1 * %div) to i64) + (sext i32 %x to i64)),+,1}<nw><%for.cond2>		Exits: ((sext i32 %x to i64) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %7 = add nsw i64 %5, %indvars.iv2
+  -->  {((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64)),+,1}<nw><%for.cond>		Exits: {((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64)),+,1}<nw><%for.cond>
+  %arrayidx = getelementptr inbounds i32** %in, i64 %7
+  -->  {((8 * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + %in),+,8}<%for.cond>		Exits: {((8 * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + %in),+,8}<%for.cond>
+  %8 = load i32** %arrayidx, align 8
+  -->  %8		Exits: <<Unknown>>
+  %arrayidx7 = getelementptr inbounds i32* %8, i64 %6
+  -->  ({(4 * ((sext i32 (-1 * %div) to i64) + (sext i32 %x to i64))),+,4}<%for.cond2> + %8)<nsw>		Exits: <<Unknown>>
+  %9 = load i32* %arrayidx7, align 4
+  -->  %9		Exits: <<Unknown>>
+  %add8 = add nsw i32 %acc.1, %9
+  -->  (%9 + %acc.1)		Exits: <<Unknown>>
+  %indvars.iv.next = add nsw i64 %indvars.iv, 1
+  -->  {(1 + (sext i32 (-1 * %div) to i64)),+,1}<nsw><%for.cond2>		Exits: (1 + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %acc.1.lcssa = phi i32 [ %acc.1, %for.cond2 ]
+  -->  %acc.1.lcssa		Exits: <<Unknown>>
+  %indvars.iv.next3 = add nsw i64 %indvars.iv2, 1
+  -->  {(1 + (sext i32 (-1 * %div) to i64)),+,1}<nsw><%for.cond>		Exits: (1 + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %acc.0.lcssa = phi i32 [ %acc.0, %for.cond ]
+  -->  %acc.0.lcssa
+  %idxprom12 = sext i32 %x to i64
+  -->  (sext i32 %x to i64)
+  %idxprom13 = sext i32 %y to i64
+  -->  (sext i32 %y to i64)
+  %arrayidx14 = getelementptr inbounds i32** %out, i64 %idxprom13
+  -->  ((8 * (sext i32 %y to i64))<nsw> + %out)<nsw>
+  %10 = load i32** %arrayidx14, align 8
+  -->  %10
+  %arrayidx15 = getelementptr inbounds i32* %10, i64 %idxprom12
+  -->  ((4 * (sext i32 %x to i64))<nsw> + %10)<nsw>
+Determining loop execution counts for: @accumulate_2d_addr
+Loop %for.cond2: backedge-taken count is ((-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+Loop %for.cond2: max backedge-taken count is 4294967296
+Loop %for.cond: backedge-taken count is ((-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+Loop %for.cond: max backedge-taken count is 4294967296
+Printing analysis 'Scalar Evolution Analysis' for function 'accumulate_2d_no_indirection':
+Classifying expressions for: @accumulate_2d_no_indirection
+  %0 = zext i32 %m to i64
+  -->  (zext i32 %m to i64)
+  %div = sdiv i32 %w_size, 2
+  -->  %div
+  %sub = sub nsw i32 0, %div
+  -->  (-1 * %div)
+  %1 = sext i32 %sub to i64
+  -->  (sext i32 (-1 * %div) to i64)
+  %2 = sext i32 %div to i64
+  -->  (sext i32 %div to i64)
+  %3 = sext i32 %x to i64
+  -->  (sext i32 %x to i64)
+  %4 = sext i32 %sub to i64
+  -->  (sext i32 (-1 * %div) to i64)
+  %5 = sext i32 %div to i64
+  -->  (sext i32 %div to i64)
+  %6 = sext i32 %y to i64
+  -->  (sext i32 %y to i64)
+  %indvars.iv2 = phi i64 [ %indvars.iv.next3, %for.inc9 ], [ %4, %entry ]
+  -->  {(sext i32 (-1 * %div) to i64),+,1}<nsw><%for.cond>		Exits: ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)
+  %acc.0 = phi i32 [ 0, %entry ], [ %acc.1.lcssa, %for.inc9 ]
+  -->  %acc.0		Exits: <<Unknown>>
+  %indvars.iv = phi i64 [ %indvars.iv.next, %for.inc ], [ %1, %for.body ]
+  -->  {(sext i32 (-1 * %div) to i64),+,1}<nsw><%for.cond2>		Exits: ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)
+  %acc.1 = phi i32 [ %acc.0, %for.body ], [ %add8, %for.inc ]
+  -->  %acc.1		Exits: <<Unknown>>
+  %7 = add nsw i64 %3, %indvars.iv
+  -->  {((sext i32 (-1 * %div) to i64) + (sext i32 %x to i64)),+,1}<nw><%for.cond2>		Exits: ((sext i32 %x to i64) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %8 = add nsw i64 %6, %indvars.iv2
+  -->  {((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64)),+,1}<nw><%for.cond>		Exits: {((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64)),+,1}<nw><%for.cond>
+  %9 = mul nsw i64 %8, %0
+  -->  {((zext i32 %m to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))),+,(zext i32 %m to i64)}<%for.cond>		Exits: {((zext i32 %m to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))),+,(zext i32 %m to i64)}<%for.cond>
+  %arrayidx = getelementptr inbounds i32* %in, i64 %9
+  -->  {((4 * (zext i32 %m to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + %in),+,(4 * (zext i32 %m to i64))}<%for.cond>		Exits: {((4 * (zext i32 %m to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + %in),+,(4 * (zext i32 %m to i64))}<%for.cond>
+  %arrayidx7 = getelementptr inbounds i32* %arrayidx, i64 %7
+  -->  {{((4 * ((sext i32 (-1 * %div) to i64) + (sext i32 %x to i64))) + (4 * (zext i32 %m to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + %in),+,(4 * (zext i32 %m to i64))}<%for.cond>,+,4}<%for.cond2>		Exits: {((4 * ((sext i32 %x to i64) + ((zext i32 %m to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))) + %in),+,(4 * (zext i32 %m to i64))}<%for.cond>
+  %10 = load i32* %arrayidx7, align 4
+  -->  %10		Exits: <<Unknown>>
+  %add8 = add nsw i32 %acc.1, %10
+  -->  (%10 + %acc.1)		Exits: <<Unknown>>
+  %indvars.iv.next = add nsw i64 %indvars.iv, 1
+  -->  {(1 + (sext i32 (-1 * %div) to i64)),+,1}<nsw><%for.cond2>		Exits: (1 + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %acc.1.lcssa = phi i32 [ %acc.1, %for.cond2 ]
+  -->  %acc.1.lcssa		Exits: <<Unknown>>
+  %indvars.iv.next3 = add nsw i64 %indvars.iv2, 1
+  -->  {(1 + (sext i32 (-1 * %div) to i64)),+,1}<nsw><%for.cond>		Exits: (1 + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %acc.0.lcssa = phi i32 [ %acc.0, %for.cond ]
+  -->  %acc.0.lcssa
+  %11 = zext i32 %m to i64
+  -->  (zext i32 %m to i64)
+  %idxprom12 = sext i32 %x to i64
+  -->  (sext i32 %x to i64)
+  %idxprom13 = sext i32 %y to i64
+  -->  (sext i32 %y to i64)
+  %12 = mul nsw i64 %idxprom13, %11
+  -->  ((zext i32 %m to i64) * (sext i32 %y to i64))
+  %arrayidx14 = getelementptr inbounds i32* %out, i64 %12
+  -->  ((4 * (zext i32 %m to i64) * (sext i32 %y to i64)) + %out)<nsw>
+  %arrayidx15 = getelementptr inbounds i32* %arrayidx14, i64 %idxprom12
+  -->  ((4 * (sext i32 %x to i64))<nsw> + (4 * (zext i32 %m to i64) * (sext i32 %y to i64)) + %out)
+Determining loop execution counts for: @accumulate_2d_no_indirection
+Loop %for.cond2: backedge-taken count is ((-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+Loop %for.cond2: max backedge-taken count is 4294967296
+Loop %for.cond: backedge-taken count is ((-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+Loop %for.cond: max backedge-taken count is 4294967296
+Printing analysis 'Scalar Evolution Analysis' for function 'accumulate_2d_addr_arr':
+Classifying expressions for: @accumulate_2d_addr_arr
+  %0 = zext i32 %y to i64
+  -->  (zext i32 %y to i64)
+  %div = sdiv i32 %w_size, 2
+  -->  %div
+  %sub = sub nsw i32 0, %div
+  -->  (-1 * %div)
+  %1 = sext i32 %sub to i64
+  -->  (sext i32 (-1 * %div) to i64)
+  %2 = sext i32 %div to i64
+  -->  (sext i32 %div to i64)
+  %3 = sext i32 %x to i64
+  -->  (sext i32 %x to i64)
+  %4 = sext i32 %sub to i64
+  -->  (sext i32 (-1 * %div) to i64)
+  %5 = sext i32 %div to i64
+  -->  (sext i32 %div to i64)
+  %6 = sext i32 %y to i64
+  -->  (sext i32 %y to i64)
+  %indvars.iv2 = phi i64 [ %indvars.iv.next3, %for.inc9 ], [ %4, %entry ]
+  -->  {(sext i32 (-1 * %div) to i64),+,1}<nsw><%for.cond>		Exits: ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)
+  %acc.0 = phi i32 [ 0, %entry ], [ %acc.1.lcssa, %for.inc9 ]
+  -->  %acc.0		Exits: <<Unknown>>
+  %indvars.iv = phi i64 [ %indvars.iv.next, %for.inc ], [ %1, %for.body ]
+  -->  {(sext i32 (-1 * %div) to i64),+,1}<nsw><%for.cond2>		Exits: ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>)
+  %acc.1 = phi i32 [ %acc.0, %for.body ], [ %add8, %for.inc ]
+  -->  %acc.1		Exits: <<Unknown>>
+  %7 = add nsw i64 %3, %indvars.iv
+  -->  {((sext i32 (-1 * %div) to i64) + (sext i32 %x to i64)),+,1}<nw><%for.cond2>		Exits: ((sext i32 %x to i64) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %8 = add nsw i64 %6, %indvars.iv2
+  -->  {((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64)),+,1}<nw><%for.cond>		Exits: {((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64)),+,1}<nw><%for.cond>
+  %9 = mul nsw i64 %8, %0
+  -->  {((zext i32 %y to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))),+,(zext i32 %y to i64)}<%for.cond>		Exits: {((zext i32 %y to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))),+,(zext i32 %y to i64)}<%for.cond>
+  %arrayidx = getelementptr inbounds i32* %in, i64 %9
+  -->  {((4 * (zext i32 %y to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + %in),+,(4 * (zext i32 %y to i64))}<%for.cond>		Exits: {((4 * (zext i32 %y to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + %in),+,(4 * (zext i32 %y to i64))}<%for.cond>
+  %arrayidx7 = getelementptr inbounds i32* %arrayidx, i64 %7
+  -->  {{((4 * ((sext i32 (-1 * %div) to i64) + (sext i32 %x to i64))) + (4 * (zext i32 %y to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + %in),+,(4 * (zext i32 %y to i64))}<%for.cond>,+,4}<%for.cond2>		Exits: {((4 * ((sext i32 %x to i64) + ((zext i32 %y to i64) * ((sext i32 (-1 * %div) to i64) + (sext i32 %y to i64))) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))) + %in),+,(4 * (zext i32 %y to i64))}<%for.cond>
+  %10 = load i32* %arrayidx7, align 4
+  -->  %10		Exits: <<Unknown>>
+  %add8 = add nsw i32 %acc.1, %10
+  -->  (%10 + %acc.1)		Exits: <<Unknown>>
+  %indvars.iv.next = add nsw i64 %indvars.iv, 1
+  -->  {(1 + (sext i32 (-1 * %div) to i64)),+,1}<nsw><%for.cond2>		Exits: (1 + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %acc.1.lcssa = phi i32 [ %acc.1, %for.cond2 ]
+  -->  %acc.1.lcssa		Exits: <<Unknown>>
+  %indvars.iv.next3 = add nsw i64 %indvars.iv2, 1
+  -->  {(1 + (sext i32 (-1 * %div) to i64)),+,1}<nsw><%for.cond>		Exits: (1 + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+  %acc.0.lcssa = phi i32 [ %acc.0, %for.cond ]
+  -->  %acc.0.lcssa
+  %idxprom12 = sext i32 %x to i64
+  -->  (sext i32 %x to i64)
+  %idxprom13 = sext i32 %y to i64
+  -->  (sext i32 %y to i64)
+  %arrayidx14 = getelementptr inbounds i32** %out, i64 %idxprom13
+  -->  ((8 * (sext i32 %y to i64))<nsw> + %out)<nsw>
+  %11 = load i32** %arrayidx14, align 8
+  -->  %11
+  %arrayidx15 = getelementptr inbounds i32* %11, i64 %idxprom12
+  -->  ((4 * (sext i32 %x to i64))<nsw> + %11)<nsw>
+Determining loop execution counts for: @accumulate_2d_addr_arr
+Loop %for.cond2: backedge-taken count is ((-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+Loop %for.cond2: max backedge-taken count is 4294967296
+Loop %for.cond: backedge-taken count is ((-1 * (sext i32 (-1 * %div) to i64)) + ((sext i32 (-1 * %div) to i64) smax (1 + (sext i32 %div to i64))<nsw>))
+Loop %for.cond: max backedge-taken count is 4294967296
+Printing analysis 'Scalar Evolution Analysis' for function 'accumulate_1d_linear':
+Classifying expressions for: @accumulate_1d_linear
+  %0 = sext i32 %n to i64
+  -->  (sext i32 %n to i64)
+  %1 = sext i32 %m to i64
+  -->  (sext i32 %m to i64)
+  %indvars.iv = phi i64 [ %indvars.iv.next, %for.inc ], [ %0, %entry ]
+  -->  {(sext i32 %n to i64),+,1}<nsw><%for.cond>		Exits: ((sext i32 %n to i64) smax (1 + (sext i32 %m to i64))<nsw>)
+  %acc.0 = phi i32 [ 0, %entry ], [ %add, %for.inc ]
+  -->  %acc.0		Exits: <<Unknown>>
+  %arrayidx = getelementptr inbounds i32* %in, i64 %indvars.iv
+  -->  {((4 * (sext i32 %n to i64)) + %in),+,4}<nsw><%for.cond>		Exits: ((4 * ((sext i32 %n to i64) smax (1 + (sext i32 %m to i64))<nsw>)) + %in)
+  %2 = load i32* %arrayidx, align 4
+  -->  %2		Exits: <<Unknown>>
+  %add = add nsw i32 %acc.0, %2
+  -->  (%2 + %acc.0)		Exits: <<Unknown>>
+  %indvars.iv.next = add nsw i64 %indvars.iv, 1
+  -->  {(1 + (sext i32 %n to i64)),+,1}<nsw><%for.cond>		Exits: (1 + ((sext i32 %n to i64) smax (1 + (sext i32 %m to i64))<nsw>))
+  %acc.0.lcssa = phi i32 [ %acc.0, %for.cond ]
+  -->  %acc.0.lcssa
+Determining loop execution counts for: @accumulate_1d_linear
+Loop %for.cond: backedge-taken count is ((-1 * (sext i32 %n to i64)) + ((sext i32 %n to i64) smax (1 + (sext i32 %m to i64))<nsw>))
+Loop %for.cond: max backedge-taken count is 4294967296
+Printing analysis 'Scalar Evolution Analysis' for function 'foo':
+Classifying expressions for: @foo
+  %0 = sext i32 %n to i64
+  -->  (sext i32 %n to i64)
+  %indvars.iv = phi i64 [ %indvars.iv.next, %for.inc ], [ 0, %entry ]
+  -->  {0,+,1}<nuw><nsw><%for.cond>		Exits: (0 smax (sext i32 %n to i64))
+  %sum.0 = phi i32 [ 0, %entry ], [ %sum.1, %for.inc ]
+  -->  %sum.0		Exits: <<Unknown>>
+  %arrayidx = getelementptr inbounds i32* %A, i64 %indvars.iv
+  -->  {%A,+,4}<nsw><%for.cond>		Exits: ((4 * (0 smax (sext i32 %n to i64))) + %A)
+  %1 = load i32* %arrayidx, align 4
+  -->  %1		Exits: <<Unknown>>
+  %arrayidx2 = getelementptr inbounds i32* %B, i64 %indvars.iv
+  -->  {%B,+,4}<nsw><%for.cond>		Exits: ((4 * (0 smax (sext i32 %n to i64))) + %B)
+  %2 = load i32* %arrayidx2, align 4
+  -->  %2		Exits: <<Unknown>>
+  %arrayidx5 = getelementptr inbounds i32* %A, i64 %indvars.iv
+  -->  {%A,+,4}<nsw><%for.cond>		Exits: ((4 * (0 smax (sext i32 %n to i64))) + %A)
+  %3 = load i32* %arrayidx5, align 4
+  -->  %3		Exits: <<Unknown>>
+  %add = add nsw i32 %3, 5
+  -->  (5 + %3)		Exits: <<Unknown>>
+  %add6 = add i32 %sum.0, %add
+  -->  (5 + %3 + %sum.0)		Exits: <<Unknown>>
+  %sum.1 = phi i32 [ %add6, %if.then ], [ %sum.0, %for.body ]
+  -->  %sum.1		Exits: <<Unknown>>
+  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1
+  -->  {1,+,1}<nuw><nsw><%for.cond>		Exits: (1 + (0 smax (sext i32 %n to i64)))
+  %sum.0.lcssa = phi i32 [ %sum.0, %for.cond ]
+  -->  %sum.0.lcssa
+Determining loop execution counts for: @foo
+Loop %for.cond: backedge-taken count is (0 smax (sext i32 %n to i64))
+Loop %for.cond: max backedge-taken count is 2147483647
+Printing analysis 'Scalar Evolution Analysis' for function 'accumulate_2d_addr_fixed':
+Classifying expressions for: @accumulate_2d_addr_fixed
+  %0 = sext i32 %x to i64
+  -->  (sext i32 %x to i64)
+  %1 = sext i32 %y to i64
+  -->  (sext i32 %y to i64)
+  %indvars.iv2 = phi i64 [ %indvars.iv.next3, %for.inc8 ], [ -8, %entry ]
+  -->  {-8,+,1}<nsw><%for.cond>		Exits: 9
+  %acc.0 = phi i32 [ 0, %entry ], [ %acc.1.lcssa, %for.inc8 ]
+  -->  %acc.0		Exits: <<Unknown>>
+  %indvars.iv = phi i64 [ %indvars.iv.next, %for.inc ], [ -8, %for.body ]
+  -->  {-8,+,1}<nsw><%for.cond1>		Exits: 9
+  %acc.1 = phi i32 [ %acc.0, %for.body ], [ %add7, %for.inc ]
+  -->  %acc.1		Exits: <<Unknown>>
+  %2 = add nsw i64 %0, %indvars.iv
+  -->  {(-8 + (sext i32 %x to i64)),+,1}<nw><%for.cond1>		Exits: (9 + (sext i32 %x to i64))
+  %3 = add nsw i64 %1, %indvars.iv2
+  -->  {(-8 + (sext i32 %y to i64)),+,1}<nw><%for.cond>		Exits: {(-8 + (sext i32 %y to i64)),+,1}<nw><%for.cond>
+  %arrayidx = getelementptr inbounds i32** %in, i64 %3
+  -->  {(-64 + (8 * (sext i32 %y to i64)) + %in),+,8}<%for.cond>		Exits: {(-64 + (8 * (sext i32 %y to i64)) + %in),+,8}<%for.cond>
+  %4 = load i32** %arrayidx, align 8
+  -->  %4		Exits: <<Unknown>>
+  %arrayidx6 = getelementptr inbounds i32* %4, i64 %2
+  -->  ({(-32 + (4 * (sext i32 %x to i64))),+,4}<%for.cond1> + %4)<nsw>		Exits: <<Unknown>>
+  %5 = load i32* %arrayidx6, align 4
+  -->  %5		Exits: <<Unknown>>
+  %add7 = add nsw i32 %acc.1, %5
+  -->  (%5 + %acc.1)		Exits: <<Unknown>>
+  %indvars.iv.next = add nsw i64 %indvars.iv, 1
+  -->  {-7,+,1}<nsw><%for.cond1>		Exits: 10
+  %acc.1.lcssa = phi i32 [ %acc.1, %for.cond1 ]
+  -->  %acc.1.lcssa		Exits: <<Unknown>>
+  %indvars.iv.next3 = add nsw i64 %indvars.iv2, 1
+  -->  {-7,+,1}<nsw><%for.cond>		Exits: 10
+  %acc.0.lcssa = phi i32 [ %acc.0, %for.cond ]
+  -->  %acc.0.lcssa
+Determining loop execution counts for: @accumulate_2d_addr_fixed
+Loop %for.cond1: backedge-taken count is 17
+Loop %for.cond1: max backedge-taken count is 17
+Loop %for.cond: backedge-taken count is 17
+Loop %for.cond: max backedge-taken count is 17

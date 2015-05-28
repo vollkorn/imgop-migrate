@@ -1,0 +1,1 @@
+/usr/bin/c++  -fPIC -std=c++11 -fno-rtti -g   -shared -Wl,-soname,liboptdetect.so -o liboptdetect.so CMakeFiles/optdetect.dir/Optdetect.cpp.o  -L/home/lukas/uni/master/MasterArbeit/workspace/llvm_36/build/lib 

@@ -1,0 +1,41 @@
+digraph "CFG for 'convolve_fixed_3_3' function" {
+	label="CFG for 'convolve_fixed_3_3' function";
+
+	Node0x264b2f0 [shape=record,label="{entry:\l  br label %for.cond\l}"];
+	Node0x264b2f0 -> Node0x264b350;
+	Node0x264b350 [shape=record,label="{for.cond:                                         \l  %s.0 = phi i32 [ 0, %entry ], [ %s.1, %for.inc6 ]\l  %k.0 = phi i32 [ 0, %entry ], [ %k.1, %for.inc6 ]\l  %j.0 = phi i32 [ -1, %entry ], [ %inc7, %for.inc6 ]\l  %cmp = icmp sle i32 %j.0, 1\l  br i1 %cmp, label %for.body, label %for.end8\l|{<s0>T|<s1>F}}"];
+	Node0x264b350:s0 -> Node0x264b3b0;
+	Node0x264b350:s1 -> Node0x264b5f0;
+	Node0x264b3b0 [shape=record,label="{for.body:                                         \l  br label %for.cond1\l}"];
+	Node0x264b3b0 -> Node0x264b410;
+	Node0x264b410 [shape=record,label="{for.cond1:                                        \l  %s.1 = phi i32 [ %s.0, %for.body ], [ %conv4, %for.inc ]\l  %k.1 = phi i32 [ %k.0, %for.body ], [ %inc, %for.inc ]\l  %i.0 = phi i32 [ -1, %for.body ], [ %inc5, %for.inc ]\l  %cmp2 = icmp sle i32 %i.0, 1\l  br i1 %cmp2, label %for.body3, label %for.end\l|{<s0>T|<s1>F}}"];
+	Node0x264b410:s0 -> Node0x264b470;
+	Node0x264b410:s1 -> Node0x264b530;
+	Node0x264b470 [shape=record,label="{for.body3:                                        \l  %inc = add nsw i32 %k.1, 1\l  %idxprom = sext i32 %k.1 to i64\l  %arrayidx = getelementptr inbounds float* %kernel, i64 %idxprom\l  %0 = load float* %arrayidx, align 4\l  %conv = sitofp i32 %s.1 to float\l  %add = fadd float %conv, %0\l  %conv4 = fptosi float %add to i32\l  br label %for.inc\l}"];
+	Node0x264b470 -> Node0x264b4d0;
+	Node0x264b4d0 [shape=record,label="{for.inc:                                          \l  %inc5 = add nsw i32 %i.0, 1\l  br label %for.cond1\l}"];
+	Node0x264b4d0 -> Node0x264b410;
+	Node0x264b530 [shape=record,label="{for.end:                                          \l  br label %for.inc6\l}"];
+	Node0x264b530 -> Node0x264b590;
+	Node0x264b590 [shape=record,label="{for.inc6:                                         \l  %inc7 = add nsw i32 %j.0, 1\l  br label %for.cond\l}"];
+	Node0x264b590 -> Node0x264b350;
+	Node0x264b5f0 [shape=record,label="{for.end8:                                         \l  br label %for.cond9\l}"];
+	Node0x264b5f0 -> Node0x264b650;
+	Node0x264b650 [shape=record,label="{for.cond9:                                        \l  %m.0 = phi i32 [ 1, %for.end8 ], [ %inc57, %for.inc56 ]\l  %sub = sub nsw i32 %nx, 1\l  %cmp10 = icmp slt i32 %m.0, %sub\l  br i1 %cmp10, label %for.body12, label %for.end58\l|{<s0>T|<s1>F}}"];
+	Node0x264b650:s0 -> Node0x264b910;
+	Node0x264b650:s1 -> Node0x264bb50;
+	Node0x264b910 [shape=record,label="{for.body12:                                       \l  br label %for.cond13\l}"];
+	Node0x264b910 -> Node0x264b970;
+	Node0x264b970 [shape=record,label="{for.cond13:                                       \l  %n.0 = phi i32 [ 1, %for.body12 ], [ %inc54, %for.inc53 ]\l  %sub14 = sub nsw i32 %ny, 1\l  %cmp15 = icmp slt i32 %n.0, %sub14\l  br i1 %cmp15, label %for.body17, label %for.end55\l|{<s0>T|<s1>F}}"];
+	Node0x264b970:s0 -> Node0x264b9d0;
+	Node0x264b970:s1 -> Node0x264ba90;
+	Node0x264b9d0 [shape=record,label="{for.body17:                                       \l  %add18 = add nsw i32 %n.0, 0\l  %idxprom19 = sext i32 %add18 to i64\l  %arrayidx20 = getelementptr inbounds i8* %in, i64 %idxprom19\l  %1 = load i8* %arrayidx20, align 1\l  %conv21 = zext i8 %1 to i32\l  %conv22 = sitofp i32 %conv21 to float\l  %inc23 = add nsw i32 0, 1\l  %idxprom24 = sext i32 0 to i64\l  %arrayidx25 = getelementptr inbounds float* %kernel, i64 %idxprom24\l  %2 = load float* %arrayidx25, align 4\l  %mul = fmul float %conv22, %2\l  %add26 = fadd float 0.000000e+00, %mul\l  %add27 = add nsw i32 %n.0, 1\l  %idxprom28 = sext i32 %add27 to i64\l  %arrayidx29 = getelementptr inbounds i8* %in, i64 %idxprom28\l  %3 = load i8* %arrayidx29, align 1\l  %conv30 = zext i8 %3 to i32\l  %conv31 = sitofp i32 %conv30 to float\l  %inc32 = add nsw i32 %inc23, 1\l  %idxprom33 = sext i32 %inc23 to i64\l  %arrayidx34 = getelementptr inbounds float* %kernel, i64 %idxprom33\l  %4 = load float* %arrayidx34, align 4\l  %mul35 = fmul float %conv31, %4\l  %add36 = fadd float %add26, %mul35\l  %add37 = add nsw i32 %n.0, 2\l  %idxprom38 = sext i32 %add37 to i64\l  %arrayidx39 = getelementptr inbounds i8* %in, i64 %idxprom38\l  %5 = load i8* %arrayidx39, align 1\l  %conv40 = zext i8 %5 to i32\l  %conv41 = sitofp i32 %conv40 to float\l  %inc42 = add nsw i32 %inc32, 1\l  %idxprom43 = sext i32 %inc32 to i64\l  %arrayidx44 = getelementptr inbounds float* %kernel, i64 %idxprom43\l  %6 = load float* %arrayidx44, align 4\l  %mul45 = fmul float %conv41, %6\l  %add46 = fadd float %add36, %mul45\l  %conv47 = sitofp i32 %s.0 to float\l  %div = fdiv float %add46, %conv47\l  %conv48 = fptoui float %div to i8\l  %mul49 = mul nsw i32 %n.0, %nx\l  %add50 = add nsw i32 %mul49, %m.0\l  %idxprom51 = sext i32 %add50 to i64\l  %arrayidx52 = getelementptr inbounds i8* %out, i64 %idxprom51\l  store i8 %conv48, i8* %arrayidx52, align 1\l  br label %for.inc53\l}"];
+	Node0x264b9d0 -> Node0x264ba30;
+	Node0x264ba30 [shape=record,label="{for.inc53:                                        \l  %inc54 = add nsw i32 %n.0, 1\l  br label %for.cond13\l}"];
+	Node0x264ba30 -> Node0x264b970;
+	Node0x264ba90 [shape=record,label="{for.end55:                                        \l  br label %for.inc56\l}"];
+	Node0x264ba90 -> Node0x264baf0;
+	Node0x264baf0 [shape=record,label="{for.inc56:                                        \l  %inc57 = add nsw i32 %m.0, 1\l  br label %for.cond9\l}"];
+	Node0x264baf0 -> Node0x264b650;
+	Node0x264bb50 [shape=record,label="{for.end58:                                        \l  ret void\l}"];
+}
