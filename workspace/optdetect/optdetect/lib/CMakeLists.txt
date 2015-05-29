@@ -1,1 +1,1 @@
-add_library( optdetect SHARED Optdetect.cpp )
+add_library( optmigrate SHARED Optmigrate.cpp )

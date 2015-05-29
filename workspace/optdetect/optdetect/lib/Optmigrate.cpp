@@ -281,23 +281,7 @@ namespace
                                                DEBUG({ dbgs() << "Coefficient source: ";
                                                                  baseptr->dump();
                                                                  });
-                                               // Get window size parameter from iterator bounds
-//                                               Value* indexoperand = nullptr;
-//
-//                                               if(ptrinstr->getNumOperands() > 1)
-//                                                   indexoperand = ptrinstr->getOperand(1);
-//                                               else
-//                                                   return false;
-//
-//                                               // Track back operand to def in parent Loop
-//                                               if(PHINode* phi = dyn_cast<PHINode>(indexoperand))
-//                                               {
-//                                                   phi->getIncomingValueForBlock(L->getLoopPreheader());
-//                                               }
-//                                               else
-//                                                   return false;
 
-//                                               SE->getExitCount(parent, parent->getExitBlock())->dump();
                                                const SCEV* BE = SE->getBackedgeTakenCount(parent);
                                                SmallVector<const SCEV *, 4> Terms;
 
