@@ -76,7 +76,12 @@ struct ConvolutionCheck {
   LoadInst *trackbackOperandRec(Value *rhs);
 
   InductionKind isInductionVariable(PHINode *Phi);
+
   Function *addUseAcceleratorPredicate(Function &F);
+
+  Value* getWindowSizeValue();
+
+  static const SCEV* getFoldsextSCEVExpression(ScalarEvolution* SE, const SCEV* op);
 };
 } // end namespace
 

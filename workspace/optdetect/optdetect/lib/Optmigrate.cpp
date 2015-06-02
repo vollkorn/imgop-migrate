@@ -51,6 +51,162 @@ using namespace llvm;
 
 #define DEBUG_TYPE "optdetect"
 
+//namespace {
+//// Helper class working with SCEVTraversal to figure out if a SCEV contains
+//// a SCEVUnknown with null value-pointer. FindInvalidSCEVUnknown::FindOne
+//// is set iff if find such SCEVUnknown.
+////
+//struct SCEVTraversalFoo {
+//
+//  ScalarEvolution *SE;
+//  SmallVector<const SCEV *, 8> lhs;
+//
+//  SCEVTraversalFoo(ScalarEvolution *SE) : SE(SE) {}
+//
+//  bool follow(const SCEV *S) {
+//    const SCEV *foo = ConvolutionCheck::getFoldsextSCEVExpression(SE, S);
+//
+//    S->dump();
+//
+//    if (foo) {
+//      dbgs() << *S << " -> simplified to -> " << *foo << "\n";
+//
+//      dbgs() << "Lhs: " << *(lhs.pop_back_val()) << "\n";
+//
+//      return false;
+//    }
+//
+//    lhs.push_back(S);
+//
+//    if(isa<SCEVAddExpr>(S))
+//		return true;
+//
+//    return false;
+//  }
+//  bool isDone() const { return false; }
+//};
+//}
+
+// Folds -1 * sext iX (-1 * %foo) --> sext(%foo)
+const SCEV* ConvolutionCheck::getFoldsextSCEVExpression(ScalarEvolution* SE, const SCEV* op)
+{	// sext iX (-1 * %foo) to iY --> -1 * sext iX (%foo) to iY
+	if(const SCEVSignExtendExpr* sext = dyn_cast<SCEVSignExtendExpr>(op))
+	{
+		const SCEV* childexpr = getFoldsextSCEVExpression(SE, sext->getOperand());
+
+		// Childexpression is negative if  childexpr != null
+		if(childexpr)
+			return SE->getNegativeSCEV(SE->getSignExtendExpr(childexpr, sext->getType()));
+	}
+
+	if(const SCEVMulExpr* e = dyn_cast<SCEVMulExpr>(op))
+	{	const SCEVConstant* lhs =  dyn_cast<SCEVConstant>(e->getOperand(0));
+
+		if(lhs && lhs->getValue()->isMinusOne())
+			if(const SCEVUnknown* rhs =  dyn_cast<SCEVUnknown>(e->getOperand(1)))
+			{
+				return rhs;
+			} else if (const SCEVSignExtendExpr* rhs =  dyn_cast<SCEVSignExtendExpr>(e->getOperand(1)))
+			{
+				return SE->getNegativeSCEV(getFoldsextSCEVExpression(SE, rhs));
+			} else return nullptr;
+		else
+			return nullptr;
+	}
+	return nullptr;
+}
+
+Value *ConvolutionCheck::getWindowSizeValue() {
+
+  assert(L && L->getParentLoop() && SE);
+
+  Value* window_size = nullptr;
+
+  const SCEV *BE = SE->getBackedgeTakenCount(L->getParentLoop());
+
+  if (BE && isa<SCEVCouldNotCompute>(BE)) {
+    errs() << "Could not compute window size\n";
+    return nullptr;
+  }
+
+  switch (BE->getSCEVType()) {
+  case scUnknown: {
+    const SCEVUnknown *s = cast<SCEVUnknown>(BE);
+    window_size = s->getValue();
+    break;
+  }
+  case scAddExpr: {
+    const SCEVAddExpr *w_scev = cast<SCEVAddExpr>(BE);
+    bool simplified = false;
+    // Simplify operands
+    const SCEV *lhs = ConvolutionCheck::getFoldsextSCEVExpression(SE, w_scev->getOperand(0));
+    if (!lhs) // Could not simplify lhs -> take original lhs
+    {
+      dbgs() << "Lhs could not be simplified\n";
+      lhs = w_scev->getOperand(0);
+    } else
+      simplified = true;
+
+    const SCEV *rhs = ConvolutionCheck::getFoldsextSCEVExpression(SE, w_scev->getOperand(1));
+    if (!rhs) // Could not simplify rhs -> take original rhs
+    {
+      dbgs() << "Rhs could not be simplified\n";
+      rhs = w_scev->getOperand(1);
+    } else
+      simplified = true;
+
+    if (!simplified) {
+      dbgs() << "Backedge take count could not be simplified.\n";
+      return nullptr;
+    }
+
+    const SCEV *new_BE = SE->getAddExpr(lhs, rhs);
+    dbgs() << "Expression " << *BE << " simplified to " << *new_BE << "\n";
+
+    // Simplified has to be one of
+    // C * sext iX (%foo) to iY
+    // C * %foo
+    // where C is constant
+    if (const SCEVMulExpr *multexpr = dyn_cast<SCEVMulExpr>(new_BE))
+      if (const SCEVConstant *LHConst = dyn_cast<SCEVConstant>(multexpr->getOperand(0))) {
+        const SCEV *RHSC = multexpr->getOperand(1);
+        if (RHSC->getSCEVType() == scUnknown)
+          window_size = cast<SCEVUnknown>(RHSC)->getValue();
+
+        // unwrap from sign extend operation
+        else if (RHSC->getSCEVType() == scSignExtend) {
+          const SCEVSignExtendExpr *SCEVsgn = cast<SCEVSignExtendExpr>(RHSC);
+
+          window_size = cast<SCEVUnknown>(SCEVsgn->getOperand())->getValue();
+
+          if(Instruction* instr = dyn_cast<Instruction>(window_size))
+            switch (instr->getOpcode()) {
+            case Instruction::SDiv:
+            case Instruction::UDiv:
+              if (instr->getNumOperands() > 1 && isa<ConstantInt>(instr->getOperand(1))) {
+                ConstantInt *divisor = cast<ConstantInt>(instr->getOperand(1));
+                Value* dividend = instr->getOperand(0);
+                dbgs() << "Divisor: " << *divisor << "\n";
+                dbgs() << "Divisor(SCEV): " << *LHConst->getValue() << "\n";
+
+                if(divisor->getSExtValue() == LHConst->getValue()->getSExtValue())
+                	return dividend;
+              }
+              break;
+            case Instruction::FDiv: {
+              dbgs() << "Non integer devision\n";
+              return nullptr;
+            }
+            }
+        }
+        return nullptr;
+      }
+
+    break;
+  }
+  }
+  return nullptr;
+}
 
 ConvolutionCheck::ConvolutionCheck(Loop *L, ScalarEvolution *SE) : L(L), SE(SE)
 {
@@ -81,7 +237,7 @@ bool ConvolutionCheck::isConvolution() {
 
   Value *CoefficientSrc = nullptr;
   Value *PixelSrc = nullptr;
-  Value *WindowSize = nullptr;
+  Value *WindowSizeParam = nullptr;
 
   for (Loop::block_iterator bb = L->block_begin(), be = L->block_end(); bb != be; ++bb) {
     for (BasicBlock::iterator it = (*bb)->begin(), end = (*bb)->end(); it != end; ++it) {
@@ -170,7 +326,8 @@ bool ConvolutionCheck::isConvolution() {
                 return false;
 
               if (coeffmultop->getOpcode() == Instruction::Mul || coeffmultop->getOpcode() == Instruction::FMul)
-                for (Use &u : coeffmultop->operands()) {
+                // Check which operand corresponds to the coeffient
+            	for (Use &u : coeffmultop->operands()) {
                   Value *op = u.get();
 
                   LoadInst *ldinstr = trackbackOperandRec(op);
@@ -210,7 +367,6 @@ bool ConvolutionCheck::isConvolution() {
                             dbgs() << "[" << *S << "]";
                           dbgs() << "\n";
                         });
-
                         arraysize = Subscripts.size();
                       }
                     }
@@ -218,30 +374,31 @@ bool ConvolutionCheck::isConvolution() {
 
                   DEBUG(dbgs() << "Array size: " << arraysize << "\n");
 
+                  WindowSizeParam = getWindowSizeValue();
+
+                  if (WindowSizeParam) {
+                    dbgs() << "Found window size: " << *WindowSizeParam << "\n";
+                    Function *Fcn = Header->getParent();
+                    bool isFormalParam = false;
+
+                    for (Argument &arg : Fcn->getArgumentList()) {
+                      if ((dyn_cast<Value>(&arg)) == WindowSizeParam) {
+                        isFormalParam = true;
+                        break;
+                      }
+                    }
+
+                    if (isFormalParam) {
+                      dbgs() << "Window size is formal parameter: " << WindowSizeParam->getName() << "\n";
+                    }
+                  }
+
                   if (ldinstr->getType()->isFloatingPointTy()) {
                     CoefficientSrc = baseptr;
                     DEBUG({
                       dbgs() << "Coefficient source: ";
                       baseptr->dump();
                     });
-
-                    const SCEV *BE = SE->getBackedgeTakenCount(parent);
-                    SmallVector<const SCEV *, 4> Terms;
-
-                    if (isa<SCEVUnknown>(BE)) {
-                      errs() << "Could not compute window size\n";
-                      return false;
-                    }
-
-                    if (const SCEVAddExpr *BEAdd = dyn_cast<SCEVAddExpr>(BE)) {
-                      //                                                   visitAll(BEAdd,)
-                      for (const SCEV *op : BEAdd->operands()) {
-                        dbgs() << "Type " << op->getSCEVType() << " ";
-                        op->dump();
-                      }
-                    } else
-                      return false;
-
                   } else if (ldinstr->getType()->isIntegerTy()) {
                     PixelSrc = baseptr;
                     DEBUG({
