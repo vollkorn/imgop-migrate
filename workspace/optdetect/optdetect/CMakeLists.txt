@@ -1,4 +1,4 @@
-project(optdetect)
+project(optmigrate)
 cmake_minimum_required(VERSION 2.8)
 
 set(PACKAGE_NAME callgraphertemplate)
@@ -7,7 +7,7 @@ set(PACKAGE_STRING "${PACKAGE_NAME} ${PACKAGE_VERSION}")
 set(PACKAGE_BUGREPORT "student@sfu.ca")
 
 set(CMAKE_BUILD_TYPE Debug)
-set(CMAKE_CXX_FLAGS "-std=c++11 -fno-rtti")
+set(CMAKE_CXX_FLAGS "-std=c++11 -fno-rtti -fpic")
 #set(CMAKE_CXX_FLAGS "-std=c++1y -fno-rtti")
 
 ############## LLVM CONFIGURATION #################

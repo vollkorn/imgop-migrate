@@ -22,10 +22,15 @@
 #include "llvm/IR/PredIteratorCache.h"
 
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/PostOrderIterator.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/GraphWriter.h"
+#include "llvm/ADT/DepthFirstIterator.h"
+
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -34,6 +39,7 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ScalarEvolutionNormalization.h"
+#include "llvm/Analysis/CallGraph.h"
 
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -44,95 +50,95 @@
 
 #include "llvm/IR/IRBuilder.h"
 
+#include <algorithm>
+
 #include "Optmigrate.h"
 
 using namespace llvm;
 
-#define DEBUG_TYPE "optdetect"
+#define DEBUG_TYPE "optmigrate"
 
-//namespace {
-//// Helper class working with SCEVTraversal to figure out if a SCEV contains
-//// a SCEVUnknown with null value-pointer. FindInvalidSCEVUnknown::FindOne
-//// is set iff if find such SCEVUnknown.
-////
-//struct SCEVTraversalFoo {
-//
-//  ScalarEvolution *SE;
-//  SmallVector<const SCEV *, 8> lhs;
-//
-//  SCEVTraversalFoo(ScalarEvolution *SE) : SE(SE) {}
-//
-//  bool follow(const SCEV *S) {
-//    const SCEV *foo = ConvolutionCheck::getFoldsextSCEVExpression(SE, S);
-//
-//    S->dump();
-//
-//    if (foo) {
-//      dbgs() << *S << " -> simplified to -> " << *foo << "\n";
-//
-//      dbgs() << "Lhs: " << *(lhs.pop_back_val()) << "\n";
-//
-//      return false;
-//    }
-//
-//    lhs.push_back(S);
-//
-//    if(isa<SCEVAddExpr>(S))
-//		return true;
-//
-//    return false;
-//  }
-//  bool isDone() const { return false; }
-//};
-//}
+static cl::opt<bool> EnableMMIdiomsRecognition("enable-matrix-mult-idioms", cl::init(true), cl::Hidden,
+                                               cl::desc("Enable recognition of matrix multiplication idioms."));
 
-// Folds -1 * sext iX (-1 * %foo) --> sext(%foo)
-const SCEV* ConvolutionCheck::getFoldsextSCEVExpression(ScalarEvolution* SE, const SCEV* op)
-{	// sext iX (-1 * %foo) to iY --> -1 * sext iX (%foo) to iY
-	if(const SCEVSignExtendExpr* sext = dyn_cast<SCEVSignExtendExpr>(op))
-	{
-		const SCEV* childexpr = getFoldsextSCEVExpression(SE, sext->getOperand());
+static cl::opt<bool> EnableConvIdiomsRecognition("enable-convolution-idioms", cl::init(true), cl::Hidden,
+                                                 cl::desc("Enable recognition of convolution idioms."));
 
-		// Childexpression is negative if  childexpr != null
-		if(childexpr)
-			return SE->getNegativeSCEV(SE->getSignExtendExpr(childexpr, sext->getType()));
-	}
+static cl::opt<bool> test_graph_isomoprh("test-graph-iso", cl::init(true), cl::Hidden, cl::desc("Bla, ein schalter."));
 
-	if(const SCEVMulExpr* e = dyn_cast<SCEVMulExpr>(op))
-	{	const SCEVConstant* lhs =  dyn_cast<SCEVConstant>(e->getOperand(0));
+//=---------------------------------------------------------------------
 
-		if(lhs && lhs->getValue()->isMinusOne())
-			if(const SCEVUnknown* rhs =  dyn_cast<SCEVUnknown>(e->getOperand(1)))
-			{
-				return rhs;
-			} else if (const SCEVSignExtendExpr* rhs =  dyn_cast<SCEVSignExtendExpr>(e->getOperand(1)))
-			{
-				return SE->getNegativeSCEV(getFoldsextSCEVExpression(SE, rhs));
-			} else return nullptr;
-		else
-			return nullptr;
-	}
-	return nullptr;
+namespace {
+// Helper class working with SCEVTraversal to figure out if a SCEV contains
+// a SCEVUnknown with null value-pointer. FindInvalidSCEVUnknown::FindOne
+// is set iff if find such SCEVUnknown.
+//
+struct SCEVTraversalCollectUnknows {
+
+  ScalarEvolution *SE;
+  SmallVector<Value *, 8> &U;
+  SmallVector<Value *, 8> *E;
+  SCEVTraversalCollectUnknows(ScalarEvolution *SE, SmallVector<Value *, 8> &unknowns,
+                              SmallVector<Value *, 8> *exceptions = nullptr)
+      : SE(SE), U(unknowns), E(exceptions) {}
+
+  bool follow(const SCEV *S) {
+    if (const SCEVUnknown *unknown = dyn_cast<SCEVUnknown>(S)) {
+      if (std::find(E->begin(), E->end(), unknown->getValue()) == E->end()) // S not in exceptions
+        U.push_back(unknown->getValue());
+    }
+    return true;
+  }
+  bool isDone() const { return false; }
+};
 }
 
-Value *ConvolutionCheck::getWindowSizeValue() {
+// Folds -1 * sext iX (-1 * %foo) --> sext(%foo)
+const SCEV *
+ConvolutionCheck::getFoldsextSCEVExpression(ScalarEvolution *SE,
+                                            const SCEV *op) { // sext iX (-1 * %foo) to iY --> -1 * sext iX (%foo) to iY
+  if (const SCEVSignExtendExpr *sext = dyn_cast<SCEVSignExtendExpr>(op)) {
+    const SCEV *childexpr = getFoldsextSCEVExpression(SE, sext->getOperand());
+
+    // Childexpression is negative if  childexpr != null
+    if (childexpr)
+      return SE->getNegativeSCEV(SE->getSignExtendExpr(childexpr, sext->getType()));
+  }
+
+  if (const SCEVMulExpr *e = dyn_cast<SCEVMulExpr>(op)) {
+    const SCEVConstant *lhs = dyn_cast<SCEVConstant>(e->getOperand(0));
+
+    if (lhs && lhs->getValue()->isMinusOne())
+      if (const SCEVUnknown *rhs = dyn_cast<SCEVUnknown>(e->getOperand(1))) {
+        return rhs;
+      } else if (const SCEVSignExtendExpr *rhs = dyn_cast<SCEVSignExtendExpr>(e->getOperand(1))) {
+        return SE->getNegativeSCEV(getFoldsextSCEVExpression(SE, rhs));
+      } else
+        return nullptr;
+    else
+      return nullptr;
+  }
+  return nullptr;
+}
+
+bool ConvolutionCheck::getFilterSizeValueFromLoop(Loop *L, Value **filtersize) {
 
   assert(L && L->getParentLoop() && SE);
 
-  Value* window_size = nullptr;
+  Value *window_size = nullptr;
 
   const SCEV *BE = SE->getBackedgeTakenCount(L->getParentLoop());
 
   if (BE && isa<SCEVCouldNotCompute>(BE)) {
     errs() << "Could not compute window size\n";
-    return nullptr;
+    return false;
   }
 
   switch (BE->getSCEVType()) {
   case scUnknown: {
     const SCEVUnknown *s = cast<SCEVUnknown>(BE);
-    window_size = s->getValue();
-    break;
+    *filtersize = s->getValue();
+    return true;
   }
   case scAddExpr: {
     const SCEVAddExpr *w_scev = cast<SCEVAddExpr>(BE);
@@ -141,7 +147,7 @@ Value *ConvolutionCheck::getWindowSizeValue() {
     const SCEV *lhs = ConvolutionCheck::getFoldsextSCEVExpression(SE, w_scev->getOperand(0));
     if (!lhs) // Could not simplify lhs -> take original lhs
     {
-      dbgs() << "Lhs could not be simplified\n";
+      // Lhs could not be simplified.
       lhs = w_scev->getOperand(0);
     } else
       simplified = true;
@@ -149,18 +155,18 @@ Value *ConvolutionCheck::getWindowSizeValue() {
     const SCEV *rhs = ConvolutionCheck::getFoldsextSCEVExpression(SE, w_scev->getOperand(1));
     if (!rhs) // Could not simplify rhs -> take original rhs
     {
-      dbgs() << "Rhs could not be simplified\n";
+      // Rhs could not be simplified
       rhs = w_scev->getOperand(1);
     } else
       simplified = true;
 
     if (!simplified) {
       dbgs() << "Backedge take count could not be simplified.\n";
-      return nullptr;
+      return false;
     }
 
     const SCEV *new_BE = SE->getAddExpr(lhs, rhs);
-    dbgs() << "Expression " << *BE << " simplified to " << *new_BE << "\n";
+    DEBUG(dbgs() << "Expression " << *BE << " simplified to " << *new_BE << "\n");
 
     // Simplified has to be one of
     // C * sext iX (%foo) to iY
@@ -178,61 +184,104 @@ Value *ConvolutionCheck::getWindowSizeValue() {
 
           window_size = cast<SCEVUnknown>(SCEVsgn->getOperand())->getValue();
 
-          if(Instruction* instr = dyn_cast<Instruction>(window_size))
+          if (Instruction *instr = dyn_cast<Instruction>(window_size))
             switch (instr->getOpcode()) {
             case Instruction::SDiv:
             case Instruction::UDiv:
               if (instr->getNumOperands() > 1 && isa<ConstantInt>(instr->getOperand(1))) {
                 ConstantInt *divisor = cast<ConstantInt>(instr->getOperand(1));
-                Value* dividend = instr->getOperand(0);
-                dbgs() << "Divisor: " << *divisor << "\n";
-                dbgs() << "Divisor(SCEV): " << *LHConst->getValue() << "\n";
+                Value *dividend = instr->getOperand(0);
+                //                dbgs() << "Divisor: " << *divisor << "\n";
+                //                dbgs() << "Divisor(SCEV): " << *LHConst->getValue() << "\n";
 
-                if(divisor->getSExtValue() == LHConst->getValue()->getSExtValue())
-                	return dividend;
+                if (divisor->getSExtValue() == LHConst->getValue()->getSExtValue()) {
+                  *filtersize = dividend;
+                  return true;
+                }
               }
               break;
             case Instruction::FDiv: {
               dbgs() << "Non integer devision\n";
-              return nullptr;
+              return false;
             }
             }
         }
-        return nullptr;
+        return false;
       }
 
     break;
   }
   }
-  return nullptr;
+  return false;
 }
 
-ConvolutionCheck::ConvolutionCheck(Loop *L, ScalarEvolution *SE) : L(L), SE(SE)
-{
+ConvolutionCheck::ConvolutionCheck(LoopInfo *LI, ScalarEvolution *SE, DominatorTree *DT, Function *F)
+    : LI(LI), SE(SE), DT(DT), F(F) {}
+
+bool ConvolutionCheck::getMemorySink(Loop *L, Value *I, SmallPtrSet<Instruction *, 8> VisitedInsts, Value **data_dst) {
+
+  Value *_data_dst = nullptr;
+
+  DEBUG(dbgs() << "Try to retrieve memory sink\n");
+
+  Instruction *instr;
+  if (!(instr = dyn_cast<Instruction>(I)))
+    return false;
+
+  SmallVector<Instruction *, 8> Worklist;
+
+  for (User *U : instr->users()) {
+    if (PHINode *phi = dyn_cast<PHINode>(U))
+      if (phi->getParent() == L->getUniqueExitBlock())
+        Worklist.push_back(phi);
+  }
+
+  if (Worklist.empty())
+    return false;
+
+  while (!Worklist.empty()) {
+    Instruction *Cur = Worklist.back();
+    Worklist.pop_back();
+
+    if (StoreInst *store = dyn_cast<StoreInst>(Cur)) {
+
+      getArrayDimension(store, &_data_dst); // TODO: check array dimension
+      if (_data_dst)
+        *data_dst = _data_dst;
+      return true;
+    }
+
+    if (Cur->user_empty())
+      return false;
+
+    for (User *U : Cur->users()) {
+      Instruction *UI = cast<Instruction>(U);
+
+      // Cross outer boundry of loop
+      //      if (UI->getParent() == L->getParentLoop()->getUniqueExitBlock())
+      //        dbgs() << "Outer loop boundry crossed\n";
+      // Ignore feedback
+      if (UI->getParent() == L->getParentLoop()->getHeader())
+        continue;
+
+      if (VisitedInsts.insert(UI).second)
+        Worklist.push_back(UI);
+    }
+  }
+  return false;
 }
 
-Value* ConvolutionCheck::getMemorySink(Instruction* I){
+bool ConvolutionCheck::getMemorySources(Value *I, Value **datasrc, Value **coeffsrc) {
 
-//	User
-//
-//	for(User* u : I->users()){
-//
-//	}
-
-	return nullptr;
-}
-
-bool ConvolutionCheck::getMemorySources(Value* I){
-
-  Instruction* instr;
-  if(!(instr = dyn_cast<Instruction>(I)) && !instr->isCommutative())
-	  return false;
+  Instruction *instr;
+  if (!(instr = dyn_cast<Instruction>(I)) && !instr->isCommutative())
+    return false;
 
   // Check which operand corresponds to the coefficient
   // and which operand corresponds to a pixel
   // pixel is assumed to be an integer type
   // coefficient is assumed to be a floating point type
-  for (Use &u : instr) {
+  for (Use &u : instr->operands()) {
     Value *op = u.get();
 
     // Each operand has to be a derived from a memory
@@ -302,14 +351,14 @@ bool ConvolutionCheck::getMemorySources(Value* I){
     DEBUG(dbgs() << "Array size: " << arraysize << "\n");
 
     if (ldinstr->getType()->isFloatingPointTy()) {
-      KernelSource = baseptr;
+      *coeffsrc = baseptr;
       DEBUG({
         dbgs() << "Coefficient source: ";
         baseptr->dump();
       });
     } else if (ldinstr->getType()->isIntegerTy()) {
 
-      PixelSource = baseptr;
+      *datasrc = baseptr;
       DEBUG({
         dbgs() << "Pixel source: ";
         baseptr->dump();
@@ -322,7 +371,38 @@ bool ConvolutionCheck::getMemorySources(Value* I){
   return true;
 }
 
-bool ConvolutionCheck::isConvolution() {
+bool ConvolutionCheck::containsConvolution(bool bypass) {
+
+  SmallVector<Loop *, 8> Worklist;
+  DenseMap<Loop *, Loop *> toplevels;
+  // Check each loop starting at the highest nesting
+  // level
+  for (Loop *L : *LI) {
+    getInnermostLoops(*L, Worklist);
+
+    for (Loop *innermost : Worklist)
+      toplevels.insert(std::make_pair(innermost, L));
+  }
+  // Check each loop starting at the highest nesting
+  // level
+  for (Loop *L : Worklist) {
+
+    if (L->isLoopSimplifyForm() && L->isLCSSAForm(*DT)) {
+      unsigned depth = L->getLoopDepth();
+      if (getRequiredParameter(L, depth / 2) && bypass)
+        addBypass(toplevels.lookup(L));
+    }
+  }
+
+  return true;
+}
+
+bool ConvolutionCheck::getRequiredParameter(Loop *L, unsigned dimensions) {
+
+  Value *_data_src_value = nullptr;
+  Value *_data_dst_value = nullptr;
+  Value *_coeff_src_value = nullptr;
+  Value *_filter_size_value = nullptr;
 
   // Check if loop is most inner loop
   if (L->getSubLoops().size() > 0) {
@@ -331,30 +411,41 @@ bool ConvolutionCheck::isConvolution() {
     return false;
   }
 
-  Loop *parent = L->getParentLoop();
+  Loop *parentLoop = L->getParentLoop();
 
-  if (!parent) {
+  if (!parentLoop) {
     DEBUG(errs() << DEBUG_TYPE << ":"
                  << "loop structure is not understood\n");
     return false;
   }
 
-  // Get end block that contains the induction variable
-  BasicBlock *Exit = L->getExitingBlock();
-  BasicBlock *PreHeader = L->getLoopPreheader();
-  BasicBlock *Header = L->getHeader();
+  // Check if outer loop has the same iteration count
+  // as the inner loop
+  Loop *tmp = L;
+  for (unsigned i = dimensions - 1; i > 0; --i) {
+    Loop *parentLoop = tmp->getParentLoop();
+    const SCEV *innerBETakenCount = SE->getBackedgeTakenCount(L);
+    const SCEV *outerBETakenCount = SE->getBackedgeTakenCount(parentLoop);
 
-  Function* F = Header->getParent();
-
-  if(F->getReturnType()->getTypeID() != Type::VoidTyID)
-  {
-	  DEBUG(errs() << DEBUG_TYPE << ":"
-	                   << "Convolution kernel has non void return type\n");
+    if (innerBETakenCount != outerBETakenCount) {
+      dbgs() << "Loops dont cover rectangular area\n";
+      dbgs() << innerBETakenCount << " != " << outerBETakenCount << "\n";
+      return false;
+    }
+    tmp = parentLoop;
   }
 
-  Value		   *ConvolveStartValue = nullptr;
-  Value		   *ConvolveEndValue   = nullptr;
-  Instruction *ExitAccInstruction  = nullptr;
+  // Get end block that contains the induction variable
+  BasicBlock *PreHeader = L->getLoopPreheader();
+
+  if (F->getReturnType()->getTypeID() != Type::VoidTyID) {
+    DEBUG(errs() << DEBUG_TYPE << ":"
+                 << "Convolution kernel has non void return type\n");
+  }
+
+  Value *ConvolveStartValue = nullptr;
+  Instruction *ExitAccInstruction = nullptr;
+
   bool CycleComplete = false;
 
   for (Loop::block_iterator bb = L->block_begin(), be = L->block_end(); bb != be; ++bb)
@@ -367,7 +458,7 @@ bool ConvolutionCheck::isConvolution() {
       Type *PhiTy = Phi->getType();
       // Check if this node is a lcssa node
       if (!PhiTy->isIntegerTy() && !PhiTy->isFloatingPointTy() && !PhiTy->isPointerTy()) {
-        dbgs() << "Optdetect: Found an non-int non-pointer PHI.\n";
+        dbgs() << "Optmigrate: Found an non-int non-pointer PHI.\n";
         return false;
       }
 
@@ -393,26 +484,29 @@ bool ConvolutionCheck::isConvolution() {
 
       // Receive potential convolution start value from pre header block
       Value *RdxStart = Phi->getIncomingValueForBlock(L->getLoopPreheader());
-	  Value *rdxinitvalue;
+      Value *rdxinitvalue;
       Value *rdxendvalue;
       // ------------------------------------------------------------------
       // ------------------------------------------------------------------
       if (PHINode *_rdxstart = dyn_cast<PHINode>(RdxStart))
-        if (_rdxstart->getParent() == parent->getHeader()) {
-          rdxinitvalue = _rdxstart->getIncomingValueForBlock(parent->getLoopPreheader());
+        if (_rdxstart->getParent() == parentLoop->getHeader()) {
+          rdxinitvalue = _rdxstart->getIncomingValueForBlock(parentLoop->getLoopPreheader());
 
           // Get value from the last block before backedge was taken
-          rdxendvalue  = _rdxstart->getIncomingValueForBlock(parent->getLoopLatch());
+          rdxendvalue = _rdxstart->getIncomingValueForBlock(parentLoop->getLoopLatch());
 
           // Convolution start value has to be defined as zero
           if (ConstantFP *fpstartval = dyn_cast<ConstantFP>(rdxinitvalue))
-            if (!fpstartval->isZero())
+            if (!fpstartval->isZero()) {
+              DEBUG(dbgs() << "Reduction does not start with zero\n");
               return false;
+            }
 
           if (ConstantInt *intstartval = dyn_cast<ConstantInt>(rdxinitvalue))
-            if (!intstartval->isZero())
+            if (!intstartval->isZero()) {
+              DEBUG(dbgs() << "Reduction does not start with zero\n");
               return false;
-
+            }
           ConvolveStartValue = rdxinitvalue;
 
           // Check if exit instruction lands in a
@@ -422,31 +516,16 @@ bool ConvolutionCheck::isConvolution() {
 
             // If user is phi instruction on exit block
             // on the outer loop, then track this value further
-            if (instr && isa<PHINode>(instr) &&
-                parent->getExitBlock() &&
-				instr->getParent() == parent->getExitBlock()) {
+            if (instr && isa<PHINode>(instr) && parentLoop->getExitBlock() &&
+                instr->getParent() == parentLoop->getExitBlock()) {
               PHINode *phi = cast<PHINode>(instr);
               if (phi->getNumIncomingValues() > 1)
                 continue;
             }
           }
 
-          errs() << "Convolution start value: " << *rdxinitvalue << "\n";
+          DEBUG(dbgs() << "Convolution start value: " << *rdxinitvalue << "\n");
         }
-
-      // ------------------------------------------------------------------
-      // ------------------------------------------------------------------
-
-      // Check if outer loop has the same iteration count
-      // as the inner loop
-      const SCEV *innerBETakenCount = SE->getBackedgeTakenCount(L);
-      const SCEV *outerBETakenCount = SE->getBackedgeTakenCount(parent);
-
-      if (innerBETakenCount != outerBETakenCount) {
-        dbgs() << "Loops does not cover rectangular area\n";
-        dbgs() << innerBETakenCount << " != " << outerBETakenCount << "\n";
-        return false;
-      }
 
       // ------------------------------------------------------------------
       // ------------------------------------------------------------------
@@ -458,8 +537,6 @@ bool ConvolutionCheck::isConvolution() {
       // Check cycle
       while (!Worklist.empty()) {
         Instruction *Cur = Worklist.pop_back_val();
-        dbgs() << "Worklist cur is: ";
-        Cur->dump();
 
         if (Cur->use_empty())
           return false;
@@ -471,9 +548,6 @@ bool ConvolutionCheck::isConvolution() {
           // exit instruction that completes the reduction cycle
           if (!L->contains(instr->getParent()) && L->getUniqueExitBlock() == instr->getParent()) {
             unsigned opcode = Cur->getOpcode();
-            dbgs() << "External use: ";
-            instr->dump();
-
             // Convolution requires an additive reduction instruction
             if (opcode != Instruction::Add && opcode != Instruction::FAdd)
               continue;
@@ -489,11 +563,11 @@ bool ConvolutionCheck::isConvolution() {
             else
               return false;
 
-            if (coeffmultop->getOpcode() == Instruction::Mul || coeffmultop->getOpcode() == Instruction::FMul)
-            	if(!getMemorySources(coeffmultop))
-            		return false;
-            else
-            	return false;	// Expression not understood
+            if (coeffmultop->getOpcode() == Instruction::Mul || coeffmultop->getOpcode() == Instruction::FMul) {
+              if (!getMemorySources(coeffmultop, &_data_src_value, &_coeff_src_value))
+                return false;
+            } else
+              return false; // Expression not understood
 
             if (ExitAccInstruction != nullptr || Cur == Phi)
               return false;
@@ -508,44 +582,63 @@ bool ConvolutionCheck::isConvolution() {
 
             ExitAccInstruction = Cur;
 
-            if!(getMemorySink(ExitAccInstruction)) // Get memory sink for this value
-            		return false;
+            if (!getMemorySink(L, ExitAccInstruction, VisitedInstr, &_data_dst_value)) // Get memory sink for this value
+              return false;
 
             continue;
           }
-
 
           if (VisitedInstr.insert(instr).second)
             Worklist.push_back(instr);
 
           // Remember that we completed the cycle.
-          if (U == Phi){
+          if (U == Phi)
             CycleComplete = true;
-            dbgs() << "Cycle complete\n";
-          }
         } // end iterating users
-      } // end iterating worklist
-    } // end iterating BBs/Instructions
+      }   // end iterating worklist
+    }     // end iterating BBs/Instructions
 
   // Receive window size parameter from
   // loop iteration count
-  WindowSize = getWindowSizeValue();
+  if (!getFilterSizeValueFromLoop(L, &_filter_size_value))
+    return false;
 
-  if(!CycleComplete && !ExitAccInstruction && !valid())
-	  return false;
+  SmallVector<Value *, 8> data_sizes;
+
+  if (!getDataDimensionSize(F, L->getParentLoop(), data_sizes, _filter_size_value))
+    return false;
+
+  // Pack values together
+  parameters.push_back(_data_src_value);
+  parameters.push_back(_data_dst_value);
+  parameters.push_back(_coeff_src_value);
+  parameters.push_back(_filter_size_value);
+
+  if (data_sizes.size())
+    parameters.insert(parameters.end(), data_sizes.begin(), data_sizes.end());
+
+  if (!CycleComplete && !ExitAccInstruction && !valid())
+    return false;
 
   return true;
 }
 
-unsigned ConvolutionCheck::getArrayDimension(const LoadInst *instr, Value **baseptr) {
-  GetElementPtrInst *ptrinstr = dyn_cast<GetElementPtrInst>(instr->getOperand(0));
-  if (!ptrinstr)
-    return 0;
-  // Check if operand is derived by another load
-  if (LoadInst *ldinstr = dyn_cast<LoadInst>(ptrinstr->getOperand(0)))
-    return getArrayDimension(ldinstr, baseptr) + 1;
+unsigned ConvolutionCheck::getArrayDimension(const Instruction *I, Value **baseptr) {
+  const GetElementPtrInst *ptr = nullptr;
+  if (isa<StoreInst>(I))
+    ptr = cast<GetElementPtrInst>((cast<StoreInst>(I))->getPointerOperand());
+  else if (isa<LoadInst>(I))
+    ptr = cast<GetElementPtrInst>((cast<LoadInst>(I))->getPointerOperand());
 
-  *baseptr = ptrinstr->getOperand(0);
+  if (!ptr)
+    return 0;
+
+  // Check if operand is derived by another load
+  Instruction *ldst = dyn_cast<Instruction>(ptr->getOperand(0));
+  if (ldst && (isa<LoadInst>(ldst) || isa<StoreInst>(ldst)))
+    return getArrayDimension(ldst, baseptr) + 1;
+
+  *baseptr = ptr->getOperand(0);
   return 1;
 }
 
@@ -554,6 +647,120 @@ unsigned ConvolutionCheck::getPointerDepth(const Type *T) {
     return getPointerDepth(T->getContainedType(0)) + 1;
 
   return T->isPointerTy() ? 1 : 0;
+}
+
+bool ConvolutionCheck::getDataDimensionSize(Function *F, Loop *L, SmallVector<Value *, 8> &D, Value *FilterWindowSize) {
+
+  Value *knhalf = nullptr;
+  Value *knhalf_sext = nullptr;
+  unsigned users = 0;
+
+  // TODO: make sure that there is just one division of this type (via optimization)
+  for (User *U : FilterWindowSize->users()) {
+    if (isa<SDivOperator>(U) || isa<UDivOperator>(U))
+      if (ConstantInt *divisor = dyn_cast<ConstantInt>(U->getOperand(1))) // get divisor
+        if (divisor->getValue() == 2)
+          knhalf = dyn_cast<Value>(U);
+  }
+
+  if (users > 2) // only two user of kernel size allowed,
+                 //%x = %div kernel_size, 2;
+                 //%y = sext kernel_size to i64
+    return false;
+
+  // convolution is nested in N outer loops
+  //
+  // for i...A, i+=1
+  //   for j...B, j+=1
+  //    for k...C  <- current loop nesing
+  //      for l...D
+
+  if (L->getParentLoop()) {
+
+    unsigned dimensions = 0;
+    for (Loop *outer = L->getParentLoop(); outer != nullptr; outer = outer->getParentLoop()) {
+
+      if (outer->getSubLoops().size() > 1) // multiple nested loops not allowed
+        return false;
+
+      const SCEVAddExpr *BEtakencount = dyn_cast<SCEVAddExpr>(SE->getBackedgeTakenCount(outer));
+
+      if (!BEtakencount)
+        return false;
+
+      PHINode *inductionvar = nullptr;
+
+      // Find induction variable
+      for (BasicBlock::iterator it = (outer->getHeader())->begin(), end = (outer->getHeader())->end(); it != end;
+           ++it) {
+        PHINode *phi_ = dyn_cast<PHINode>(it);
+        if (!phi_ || isInductionVariable(phi_) != InductionKind::IK_IntInduction)
+          continue;
+
+        inductionvar = phi_;
+      }
+
+      if (!inductionvar)
+        return false;
+
+      const SCEV *SV = SE->getSCEV(inductionvar);
+      const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(SV);
+      //      dbgs() << "Loop at depth "<< outer->getLoopDepth() << " has induction variable exit " << *AR <<"\n";
+
+      const SCEV *ExitValue = SE->getSCEVAtScope(SV, outer->getParentLoop());
+      if (!SE->isLoopInvariant(ExitValue, outer)) {
+        dbgs() << "<<Unknown>>";
+      } else {
+        dbgs() << "Data iteration start: " << *(AR->getStart()) << "\n";
+        dbgs() << "Data iteration exit value: " << *ExitValue << "\n";
+
+        SmallVector<Value *, 8> unknowns;
+        SmallVector<Value *, 8> exceptions;
+        exceptions.push_back(knhalf);
+
+        SCEVTraversalCollectUnknows visitor(SE, unknowns, &exceptions);
+        visitAll(ExitValue, visitor);
+
+        if (unknowns.size() > 1)
+          return false;
+
+        D.push_back(unknowns[0]);
+        //    	  if(const SCEVAddExpr* SCADexpr = dyn_cast<SCEVAddExpr>(ExitValue)){
+        //    		  SmallVector<const SCEV*, 8> ops;
+        //    		  for(auto op : SCADexpr->operands())
+        //    			  ops.push_back(op);
+        //
+        //    		  ops.push_back(SE->getSignExtendExpr(SE->getUnknown(knhalf), ExitValue->getType()));
+        //
+        //    		  const SCEV* SIMPL = SE->getAddExpr(ops);
+        //    		  dbgs() << "Simplified: " << *SIMPL << "\n";
+        //    	  }
+      }
+      //      const SCEV *doubleWindowSize = SE->getSignExtendExpr(SE->getMulExpr(SE->getConstant(knhalf->getType(), 2),
+      // SE->getUnknown(knhalf)), BEtakencount->getType());
+      //
+      //      dbgs() << "Backedge taken count\n";
+      //      BEtakencount->dump();
+      //
+      //      BEtakencount->getType()->dump();
+      //      doubleWindowSize->getType()->dump();
+      //
+      //	  const SCEV *NBEtakencount = SE->getAddExpr(BEtakencount, doubleWindowSize);
+      //      dbgs() << "NEW Backedge taken count\n";
+      //
+      //      if (NBEtakencount)
+      //    	  NBEtakencount->dump();
+      //      else
+      //        dbgs() << "null\n";
+    }
+
+    for (auto data_size : D)
+      dbgs() << "Found data size: " << *data_size << "\n";
+
+    if (dimensions > allowed_dimensions)
+      return false;
+  }
+  return true;
 }
 
 // Returns the next load instruction to an operand
@@ -579,6 +786,7 @@ LoadInst *ConvolutionCheck::trackbackOperandRec(Value *rhs) {
 }
 
 ConvolutionCheck::InductionKind ConvolutionCheck::isInductionVariable(PHINode *Phi) {
+
   Type *PhiTy = Phi->getType();
   // We only handle integer and pointer inductions variables.
   if (!PhiTy->isIntegerTy() && !PhiTy->isPointerTy())
@@ -605,171 +813,426 @@ ConvolutionCheck::InductionKind ConvolutionCheck::isInductionVariable(PHINode *P
   return IK_NoInduction;
 }
 
-Function *ConvolutionCheck::addUseAcceleratorPredicate(Module* m) {
-  std::string name = "UseAccelerator";
+Function *ConvolutionCheck::addUseAcceleratorPredicate(Module *m) {
+  std::string name = "convolve_hw_use_accelerator";
 
   // Check if "UseAccelerator" predicate is already defined
   if (Function *fcn = m->getFunction(name))
     return fcn;
 
   LLVMContext &modulectx = m->getContext();
+  std::vector<Type *> args;
+  args.push_back(Type::getInt32Ty(modulectx)); // kernel size
+  args.push_back(Type::getInt32Ty(modulectx)); // size of x dimension
+  args.push_back(Type::getInt32Ty(modulectx)); // size of y dimension
 
-  FunctionType *fcnty = FunctionType::get(Type::getInt1Ty(modulectx), false);
+  FunctionType *fcnty = FunctionType::get(Type::getInt1Ty(modulectx), args, false);
 
   Function *fcn = Function::Create(fcnty, Function::ExternalLinkage, name, m);
-
-  // Create a new basic block to start insertion into.
-  BasicBlock *BB = BasicBlock::Create(modulectx, "entry", fcn);
-
-  IRBuilder<> Builder(BB);
-
-  Builder.CreateRet(ConstantInt::get(IntegerType::getInt1Ty(modulectx), 1, false));
 
   return fcn;
 }
 
-Function* ConvolutionCheck::addBypass(Function& F){
+Function *ConvolutionCheck::addBypass(Loop *toplvl) {
 
-	if(!valid())
-		return nullptr;
+  if (!toplvl || !valid())
+    return nullptr;
 
-	Module *m = F.getParent();
-	LLVMContext &modulectx = m->getContext();
+  Value *_filter_size = parameters[CP_Filter_Size];
+  Value *_data_src = parameters[CP_Data_Src];
+  Value *_data_dst = parameters[CP_Data_Dst];
+  Value *_coeff_src = parameters[CP_Coeff_Src];
 
-	Function* usepredicate = addUseAcceleratorPredicate(m);
+  SmallVector<Value *, 8> dimension_sizes;
+  for (SmallVector<Value *, 8>::iterator I = parameters.begin() + CP_Dimension_Sizes, E = parameters.end(); I != E; ++I)
+    dimension_sizes.push_back(*I);
 
-	BasicBlock& entry = F.getEntryBlock();
+  Module *m = F->getParent();
 
-	// Create an upstream decision block
-	BasicBlock *BBBypassDec = BasicBlock::Create(modulectx, "entry0", &F, &entry);
+  LLVMContext &modulectx = m->getContext();
 
-	// Create accelerator call site
-	BasicBlock *BBBypass    = BasicBlock::Create(modulectx, "acc", &F, &entry);
+  Function *usepredicate = addUseAcceleratorPredicate(m);
 
-	IRBuilder<> Builder(BBBypassDec);
+  BasicBlock *preheader = toplvl->getLoopPreheader();
 
-	// Branch to bypass if predicate evaluates to true
-	CallInst * bypasscall = Builder.CreateCall(usepredicate, "bypass"); // name only for debugging purpose
-	Builder.CreateCondBr(bypasscall, BBBypass, &entry);
+  BasicBlock *BBBypassDec = BasicBlock::Create(modulectx, "bypassdesc", F, preheader);
 
-	Builder.SetInsertPoint(BBBypass);
-	// distinguish interface on parameter type
+  //	   A
+  //	  / \
+	//	 /   \
+	//	B     C
+  //
+  //	   A
+  //	  / \
+	//	 /   \
+	//	B     P
+  //	     / \
+	//		/   \
+	//	   HW    L
+  for (pred_iterator PI = pred_begin(preheader), E = pred_end(preheader); PI != E; ++PI) {
+    BasicBlock *Pred = *PI;
+    TerminatorInst *term = Pred->getTerminator();
+    if (term) { // term may be null!
+      BranchInst *branch = dyn_cast<BranchInst>(term);
+      for (unsigned i = 0; i < branch->getNumSuccessors(); ++i) {
+        BasicBlock *succ = branch->getSuccessor(i);
+        if (succ == preheader)
+          branch->setSuccessor(i, BBBypassDec);
+      }
+    }
+  }
 
-	std::vector<Value*> args;
-	args.push_back(PixelSource);
-	args.push_back(PixelSink);
-	args.push_back(KernelSource);
-	args.push_back(WindowSize);
-	for(Value* v : IndexParams)
-		args.push_back(v);
+  // Create accelerator call site
+  BasicBlock *BBBypass = BasicBlock::Create(modulectx, "acc", F);
 
-	Function* bypass_iface;
-	if(getPointerDepth(PixelSink->getType()) == 1)
-		bypass_iface = create_hw_iface0(m, args);
-	else if(getPointerDepth(PixelSink->getType()) == 2)
-		bypass_iface = create_hw_iface1(m, args);
+  IRBuilder<> Builder(BBBypassDec);
+  std::vector<Value *> predicateargs;
+  predicateargs.push_back(_filter_size);
+  for (auto dimsize : dimension_sizes)
+    predicateargs.push_back(dimsize);
 
+  // Create an upstream decision block
+  CallInst *bypasscall = Builder.CreateCall(usepredicate, predicateargs, "bypass"); // name only for debugging purpose
 
-	Builder.CreateCall(bypass_iface, args);
-	Builder.CreateRetVoid();
-	return nullptr;
+  // Branch to bypass if predicate evaluates to true
+  Builder.CreateCondBr(bypasscall, BBBypass, preheader);
+  Builder.SetInsertPoint(BBBypass);
+  // distinguish interface on parameter type
+
+  std::vector<Value *> bypassargs;
+  bypassargs.push_back(_data_src);
+  bypassargs.push_back(_data_dst);
+  bypassargs.push_back(_coeff_src);
+  bypassargs.push_back(_filter_size);
+  for (auto dimsize : dimension_sizes)
+    bypassargs.push_back(dimsize);
+
+  Function *bypass_iface;
+  if (getPointerDepth(_data_dst->getType()) == 1)
+    bypass_iface = create_hw_iface0(m);
+  else if (getPointerDepth(_data_dst->getType()) == 2)
+    bypass_iface = create_hw_iface1(m);
+
+  Builder.CreateCall(bypass_iface, bypassargs);
+  Builder.CreateRetVoid();
+
+  return bypass_iface;
 }
 
-Function *ConvolutionCheck::create_hw_iface0(Module* m, ArrayRef<Value *> params){
+Function *ConvolutionCheck::create_hw_iface0(Module *m) {
 
-	LLVMContext &modulectx = m->getContext();
+  LLVMContext &modulectx = m->getContext();
 
-	// Create bypass interface
-	std::vector<Type*> bypassargs;
-	bypassargs.push_back(Type::getInt8PtrTy(modulectx));	// Src (i8*)
-	bypassargs.push_back(Type::getInt8PtrTy(modulectx)); 	// Dst (i8*)
-	bypassargs.push_back(Type::getFloatPtrTy(modulectx));	// Kernel (float*)
-	bypassargs.push_back(Type::getInt32Ty(modulectx));		// Window size (i32)
-	bypassargs.push_back(Type::getInt32Ty(modulectx));		// x - coordinate (i32)
-	bypassargs.push_back(Type::getInt32Ty(modulectx));		// y - coordinate (i32)
+  // Create bypass interface
+  std::vector<Type *> bypassargs;
+  bypassargs.push_back(Type::getInt8PtrTy(modulectx));  // Src (i8*)
+  bypassargs.push_back(Type::getInt8PtrTy(modulectx));  // Dst (i8*)
+  bypassargs.push_back(Type::getFloatPtrTy(modulectx)); // Kernel (float*)
+  bypassargs.push_back(Type::getInt32Ty(modulectx));    // Window size (i32)
 
-	FunctionType *fcnty = FunctionType::get(Type::getVoidTy(modulectx), bypassargs, false);
-	Function *bypass_iface = Function::Create(fcnty,
-												Function::ExternalLinkage,
-												bypass_iface_fcn_prefix + "0",
-												m);
+  bypassargs.push_back(Type::getInt32Ty(modulectx)); // Data size x
+  bypassargs.push_back(Type::getInt32Ty(modulectx)); // Data size y
 
-	return bypass_iface;
+  FunctionType *fcnty = FunctionType::get(Type::getVoidTy(modulectx), bypassargs, false);
+  Function *bypass_iface = nullptr;
+  bypass_iface = m->getFunction(bypass_iface_fcn_prefix + "0");
+  if (!bypass_iface)
+    bypass_iface = Function::Create(fcnty, Function::ExternalLinkage, bypass_iface_fcn_prefix + "0", m);
 
+  return bypass_iface;
 }
-Function *ConvolutionCheck::create_hw_iface1(Module* m, ArrayRef<Value *> params){
-	LLVMContext &modulectx = m->getContext();
+Function *ConvolutionCheck::create_hw_iface1(Module *m) {
+  LLVMContext &modulectx = m->getContext();
 
-	// Create bypass interface
-	std::vector<Type*> bypassargs;
-	bypassargs.push_back(PointerType::get(Type::getInt8PtrTy(modulectx), 0));	// Src (i8**)
-	bypassargs.push_back(PointerType::get(Type::getInt8PtrTy(modulectx), 0)); 	// Dst (i8**)
-	bypassargs.push_back(Type::getFloatPtrTy(modulectx));	// Kernel (float*)
-	bypassargs.push_back(Type::getInt32Ty(modulectx));		// Window size (i32)
-	bypassargs.push_back(Type::getInt32Ty(modulectx));		// x - coordinate (i32)
-	bypassargs.push_back(Type::getInt32Ty(modulectx));		// y - coordinate (i32)
+  // Create bypass interface
+  std::vector<Type *> bypassargs;
+  bypassargs.push_back(PointerType::get(Type::getInt8PtrTy(modulectx), 0)); // Src (i8**)
+  bypassargs.push_back(PointerType::get(Type::getInt8PtrTy(modulectx), 0)); // Dst (i8**)
+  bypassargs.push_back(Type::getFloatPtrTy(modulectx));                     // Kernel (float*)
+  bypassargs.push_back(Type::getInt32Ty(modulectx));                        // Window size (i32)
+  bypassargs.push_back(Type::getInt32Ty(modulectx));                        // Data size x
+  bypassargs.push_back(Type::getInt32Ty(modulectx));                        // Data size y
 
-	FunctionType *fcnty = FunctionType::get(Type::getVoidTy(modulectx), bypassargs, false);
-	Function *bypass_iface = Function::Create(fcnty,
-												Function::ExternalLinkage,
-												bypass_iface_fcn_prefix + "1",
-												m);
-	return bypass_iface;
-}
+  FunctionType *fcnty = FunctionType::get(Type::getVoidTy(modulectx), bypassargs, false);
 
-bool ConvolutionCheck::valid()
-{
-	bool valid = true;
-	// all parameters available
-	valid &= (WindowSize  && KernelSource &&
-			  PixelSource && PixelSink
-			  && !IndexParams.empty());
-
-	if(!valid)
-		return false;
-	// Input/output type is the same (type is immutable)
-	valid &= (PixelSource->getType() == PixelSink->getType());
-
-	return valid;
+  Function *bypass_iface = nullptr;
+  bypass_iface = m->getFunction(bypass_iface_fcn_prefix + "1");
+  if (!bypass_iface)
+    bypass_iface = Function::Create(fcnty, Function::ExternalLinkage, bypass_iface_fcn_prefix + "1", m);
+  return bypass_iface;
 }
 
-bool Optdetect::runOnFunction(Function &F) {
-  LI = &getAnalysis<LoopInfo>();
-  DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  SE = &getAnalysis<ScalarEvolution>();
+ExpressionTree *ExpressionTree::calculateExpressionTree(BasicBlock *BB, ScalarEvolution *SE, LoopInfo *LI) {
+
+  ExpressionTree *T = nullptr;
+
+  for (BasicBlock::iterator bb = BB->begin(), be = BB->end(); bb != be; ++bb) {
+
+    Instruction *inst = &*bb;
+
+    if (StoreInst *store = dyn_cast<StoreInst>(inst)) { // Check if instruction is possible left hand side of
+      T = new ExpressionTree();
+
+      ExpressionTreeNode *assignment = ExpressionTree::calculateAssignmentSubtree(T, store, SE, LI);
+    }
+  }
+
+  return T;
+}
+
+ExpressionTreeNode *ExpressionTree::calculateAssignmentSubtree(ExpressionTree *tree, StoreInst *store,
+                                                               ScalarEvolution *SE, LoopInfo *LI) {
+
+  ExpressionTreeNode *assign_node = new ExpressionTreeNode(tree, ExpressionTreeNode::ASSIGN, store);
+
+  SmallVector<std::pair<Value *, ExpressionTreeNode *>, 8> stack;
+
+  stack.push_back(std::make_pair(store, assign_node));
+
+  while (!stack.empty()) {
+
+    std::pair<Value *, ExpressionTreeNode *> tuple = stack.pop_back_val();
+    Value *val = tuple.first;
+    ExpressionTreeNode *CurNode = tuple.second;
+
+    if (isa<Instruction>(val)) {
+
+      Instruction *instr = cast<Instruction>(val);
+
+      switch (instr->getOpcode()) {
+      case Instruction::Store: {
+
+        StoreInst *store = dyn_cast<StoreInst>(instr);
+
+        Value *addressptr = store->getPointerOperand();
+        Value *value = store->getValueOperand();
+
+        stack.push_back(std::make_pair(addressptr, assign_node));
+        stack.push_back(std::make_pair(value, assign_node));
+
+        break;
+      }
+
+      case Instruction::Load: {
+
+        LoadInst *load = dyn_cast<LoadInst>(instr);
+
+        Value *addressptr = load->getPointerOperand();
+
+        stack.push_back(std::make_pair(addressptr, CurNode));
+
+        break;
+      }
+      case Instruction::GetElementPtr: {
+
+        GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(instr);
+        Value *ptrop = gep->getPointerOperand();
+        Type *ty = gep->getPointerOperandType();
+
+        // Type is [m x [n  x [ o x footype] ] ]
+        if (ty->isArrayTy()) {
+
+        }
+        // Type is footype *...*
+        else if (ty->isPointerTy()) {
+        }
+
+        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::SUBSCRIPT, gep);
+        CurNode->add_child(CurNode->begin(), node);
+
+        for (Use &U : gep->operands()) {
+          Value *operand = U.get();
+          stack.push_back(std::make_pair(operand, node));
+        }
+
+        break;
+      }
+      case Instruction::Add:
+      case Instruction::FAdd: {
+
+        Operator *instr = cast<Operator>(val);
+        // XXX: adding nodes to stack is always the same -> refactor
+        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::ADD, val);
+
+        CurNode->add_child(CurNode->end(), node);
+
+        for (Use &U : instr->operands()) {
+          Value *operand = U.get();
+          stack.push_back(std::make_pair(operand, node));
+        }
+
+        break;
+      }
+      case Instruction::Mul:
+      case Instruction::FMul: {
+        Operator *instr = cast<Operator>(val);
+
+        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::MUL, val);
+
+        CurNode->add_child(CurNode->end(), node);
+
+        for (Use &U : instr->operands()) {
+          Value *operand = U.get();
+          stack.push_back(std::make_pair(operand, node));
+        }
+        break;
+      }
+      case Instruction::SIToFP: {
+
+        SIToFPInst *instr = cast<SIToFPInst>(val);
+        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::ITOF, val);
+
+        CurNode->add_child(CurNode->end(), node);
+
+        for (Use &U : instr->operands()) {
+          Value *operand = U.get();
+          stack.push_back(std::make_pair(operand, node));
+        }
+        break;
+      }
+
+      case Instruction::Trunc: {
+
+        TruncInst *instr = cast<TruncInst>(val);
+        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::TRUNC, val);
+
+        CurNode->add_child(CurNode->end(), node);
+
+        for (Use &U : instr->operands()) {
+          Value *operand = U.get();
+          stack.push_back(std::make_pair(operand, node));
+        }
+
+        break;
+      }
+      case Instruction::ZExt: {
+
+        ZExtInst *instr = cast<ZExtInst>(val);
+        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::SEXT, val);
+
+        CurNode->add_child(CurNode->end(), node);
+
+        for (Use &U : instr->operands()) {
+          Value *operand = U.get();
+          stack.push_back(std::make_pair(operand, node));
+        }
+
+        break;
+      }
+
+      case Instruction::PHI: {
+
+        PHINode *phi = cast<PHINode>(val);
+        Loop *L = LI->getLoopFor(phi->getParent());
+
+        if (phi == L->getCanonicalInductionVariable()) {
+          const SCEV *scev = SE->getSCEV(phi);
+
+          if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(scev)) {
+
+            const SCEVConstant *step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(*SE));
+
+            assert(step != nullptr && "Step count of induction is not constant");
+
+            ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::INDUCTION, phi, step);
+            CurNode->add_child(CurNode->begin(), node);
+
+            dbgs() << "Is induction value: " << *phi << "\n";
+            dbgs() << "Steps by: " << *step << "\n";
+          }
+        }
+        break;
+      }
+
+      default:
+        dbgs() << "Dont know how to handle " << *val << "\n";
+      }
+    } else if (isa<Constant>(val)) {
+
+      Constant *_const = dyn_cast<Constant>(val);
+
+      ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::CONST, _const);
+
+      CurNode->add_child(CurNode->begin(), node);
+
+    } else if (isa<Argument>(val)) {
+
+      Argument *arg = dyn_cast<Argument>(val);
+
+      ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::VAR, arg);
+
+      CurNode->add_child(CurNode->begin(), node);
+    }
+  }
+
+  return assign_node;
+}
+
+bool ConvolutionCheck::valid() {
+  bool valid = true;
+
+  Value *_filter_size = parameters[CP_Filter_Size];
+  Value *_data_src = parameters[CP_Data_Src];
+  Value *_data_dst = parameters[CP_Data_Dst];
+  Value *_coeff_src = parameters[CP_Coeff_Src];
+  SmallVector<Value *, 8> dimension_sizes;
+  for (SmallVector<Value *, 8>::iterator I = parameters.begin() + CP_Dimension_Sizes, E = parameters.end(); I != E; ++I)
+    dimension_sizes.push_back(*I);
+
+  // all parameters available
+  valid &= (_coeff_src && _filter_size && _data_src && _data_dst && dimension_sizes.size() > 0);
+
+  if (!valid)
+    return false;
+  // Input/output type is the same (type is immutable)
+  valid &= (_data_src->getType() == _data_dst->getType());
+
+  return valid;
+}
+
+bool Optmigrate::runOnFunction(Function &F) {
+
+  if (test_graph_isomoprh) {
+    GraphMatcher<SomeGraph*>::test_();
+    return false;
+  }
+  LoopInfo *LI = &getAnalysis<LoopInfo>();
+  ScalarEvolution *SE = &getAnalysis<ScalarEvolution>();
+  DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
   if (F.isDeclaration())
     return false;
 
-  if (nullptr == LI)
-    return false;
+  if (DT && LI && SE) {
+    if (EnableConvIdiomsRecognition) {
+      dbgs() << "Checking \"" << F.getName() << "\" for convolution operation\n";
+      ConvolutionCheck cv(LI, SE, DT, &F);
 
-  DEBUG(dbgs() << "Checking for convolution in Fcn: " << F.getName() << "\n");
+      cv.containsConvolution(true);
+    }
 
-  SmallVector<Loop *, 8> Worklist;
+    if (EnableMMIdiomsRecognition) {
 
-  // Check each loop starting at the highest nesting
-  // level
-  for (Loop *L : *LI)
-    getInnermostLoops(*L, Worklist);
+      dbgs() << "Checking \"" << F.getName() << "\" for matrix-multiply-like operation\n";
 
-  for (Loop *L : Worklist) {
-    if (!L->isLoopSimplifyForm() && !L->isLCSSAForm(*DT))
-      break; // TODO: add error report
-    ConvolutionCheck cv(L, SE);
+      //      std::vector<ExpressionTree *> expressions;
 
-    if(cv.isConvolution())
-    	cv.addBypass(F);
+      //      ExpressionTree::calculateGeneralExpressionTree(&F, expressions, SE, LI);
+
+      const SCFG *foo = SCFG::createSimplifiedCFG(&F, LI, SE);
+      llvm::ViewGraph<const SCFG *>(foo, "foo", false, "Abstract control flow graph of " + F.getName());
+      //        llvm::ViewGraph<const ExpressionTree *>(tree, "foo", false, "Expression tree in " + F.getName());
+
+      foo->serialize(std::string(F.getName()) + ".json");
+    }
   }
 
   return false;
 }
 
-void Optdetect::print(raw_ostream &O, const Module *M) const {
-  O << "Function pass print called: " << this->getPassName() << "\n";
-}
+void Optmigrate::print(raw_ostream &O, const Module *M) const {}
 
-void Optdetect::getInnermostLoops(Loop &L, SmallVectorImpl<Loop *> &V) {
+static void getInnermostLoops(Loop &L, SmallVectorImpl<Loop *> &V) {
   if (L.empty()) // Checks if loop have nested loops
     return V.push_back(&L);
 
@@ -777,5 +1240,5 @@ void Optdetect::getInnermostLoops(Loop &L, SmallVectorImpl<Loop *> &V) {
     getInnermostLoops(*inner, V);
 }
 
-char Optdetect::ID = 0;
-static RegisterPass<Optdetect> X("optdetect", "Identify migratable operation");
+char Optmigrate::ID = 0;
+static RegisterPass<Optmigrate> X("optmigrate", "Identify migratable operation");

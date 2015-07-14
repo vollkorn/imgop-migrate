@@ -10,7 +10,7 @@
 
 %all the other includes etc. are done in the thesis.sty file.
 \usepackage{thesis}
-
+\usepackage{amsthm}
 %
 % These commands need to be defined in order to produce a correct and personalized document
 %
@@ -41,6 +41,10 @@
     pdfsubject={\doctitle},
     pdfkeywords={\keywords}
 }
+
+
+\theoremstyle{definition}
+\newtheorem{defn}{Definition}
 
 \begin{document}
 
@@ -114,8 +118,8 @@
 
 \clearemptydoublepage
 
-\chapter{Second Real Chapter}\label{chapter:second_real_chapter}
-\input{chapters/second_real_chapter}
+\chapter{Converting LLVM programs to a canonical form}\label{chapter:second_real_chapter}
+\input{chapters/llvm_canonical}
 
 \clearemptydoublepage
 

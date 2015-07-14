@@ -10,23 +10,31 @@
 
 #include <sys/types.h>
 
-void convolve(
+void convolve_arr_linear(
         const u_int8_t *in,
         u_int8_t *out,
         const float *kernel,
-        const int nx,           // image x dimension
-        const int ny,           // image y dimension
-        const int kn
+        const int kn,
+        const int dim_x,           // image x dimension
+        const int dim_y           // image y dimension
         );
 
-//void convolve_fixed_3_3(
-//        const u_int8_t *in,
-//        u_int8_t *out,
-//        const float *kernel,
-//        const int nx,           // image x dimension
-//        const int ny            // image y dimension
-//        );
-//
+void convolve_arr_indirection(
+        const u_int8_t **in,
+        u_int8_t **out,
+        const float *kernel,
+        const int kn,
+        const int dim_x,           // image x dimension
+        const int dim_y           // image y dimension
+        );
 
+void convolve_loop_nest(
+        const u_int8_t **in,
+        u_int8_t **out,
+        const float *kernel,
+        const int kn,
+        const int dim_x,           // image x dimension
+        const int dim_y           // image y dimension
+        );
 
 #endif /* CONVOLVE_CONVOLVE_H_ */
