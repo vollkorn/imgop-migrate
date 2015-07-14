@@ -62,26 +62,78 @@ struct ConvolutionCheck {
   };
 
   Loop *L;
+
   ScalarEvolution *SE;
+
+  Value *WindowSize = nullptr;
+  Value *KernelSource = nullptr;
+  Value *PixelSource = nullptr;
+  Value *PixelSink = nullptr;
+
+  const std::string bypass_iface_fcn_prefix = "convolve_bypass_hw_iface";
+
+  SmallVector<Value *, 8> IndexParams; // x, y, z...
 
   //
   ConvolutionCheck(Loop *L, ScalarEvolution *SE);
 
   bool isConvolution();
 
-  unsigned isIndirectionArrayAccess(const LoadInst *instr, Value **baseptr);
+  Function *addBypass(Function &F);
 
-  unsigned getPointerDepth(const Type *T);
+  static const SCEV *getFoldsextSCEVExpression(ScalarEvolution *SE, const SCEV *op);
+
+private:
+
+  Value *getWindowSizeValue();
+
+  /// Returns the induction kind of a phi value
+  InductionKind isInductionVariable(PHINode *Phi);
+
+  Function *addUseAcceleratorPredicate(Module *m);
 
   LoadInst *trackbackOperandRec(Value *rhs);
 
-  InductionKind isInductionVariable(PHINode *Phi);
+  /// Returns the dimension of an array with indirectional layout
+  unsigned getArrayDimension(const LoadInst *instr, Value **baseptr);
 
-  Function *addUseAcceleratorPredicate(Function &F);
+  /// Return pointer depth of a pointer type
+  /// i.e. returns 3 for i8***
+  unsigned getPointerDepth(const Type *T);
 
-  Value* getWindowSizeValue();
 
-  static const SCEV* getFoldsextSCEVExpression(ScalarEvolution* SE, const SCEV* op);
+  /// Extract PixelSource and KernelSource from
+  /// operation
+  /// returns true if bouth values found, false otherwise
+  bool  getMemorySources(Value* I);
+
+  Value *getMemorySink(Instruction *I);
+
+  /// Create hw interface
+  ///
+  /// one dimensional layout
+  /// param[0] = input array	(iX*)
+  /// param[1] = output array   (iX*)
+  /// param[2] = kernel			(float*)
+  /// param[3] = window size    (i32)
+  /// param[4] = x-coordinate   (i32)
+  /// param[5] = y-coordinate   (i32)
+  Function *create_hw_iface0(Module* m, ArrayRef<Value *> params);
+
+  /// Create hw interface
+  ///
+  /// two dimensional, indirectional layout
+  /// param[0] = input array	(iX**)
+  /// param[1] = output array   (iX**)
+  /// param[2] = kernel			(float*)
+  /// param[3] = window size    (i32)
+  /// param[4] = x-coordinate   (i32)
+  /// param[5] = y-coordinate   (i32)
+  Function *create_hw_iface1(Module *m, ArrayRef<Value *> params);
+
+  /// Returns true if all parameters of the convulution operation
+  /// are available
+  bool valid();
 };
 } // end namespace
 

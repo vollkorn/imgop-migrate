@@ -26,7 +26,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Casting.h"
-
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -212,7 +211,119 @@ ConvolutionCheck::ConvolutionCheck(Loop *L, ScalarEvolution *SE) : L(L), SE(SE)
 {
 }
 
+Value* ConvolutionCheck::getMemorySink(Instruction* I){
+
+//	User
+//
+//	for(User* u : I->users()){
+//
+//	}
+
+	return nullptr;
+}
+
+bool ConvolutionCheck::getMemorySources(Value* I){
+
+  Instruction* instr;
+  if(!(instr = dyn_cast<Instruction>(I)) && !instr->isCommutative())
+	  return false;
+
+  // Check which operand corresponds to the coefficient
+  // and which operand corresponds to a pixel
+  // pixel is assumed to be an integer type
+  // coefficient is assumed to be a floating point type
+  for (Use &u : instr) {
+    Value *op = u.get();
+
+    // Each operand has to be a derived from a memory
+    LoadInst *ldinstr = trackbackOperandRec(op);
+    if (!ldinstr)
+      return false;
+
+    GetElementPtrInst *ptrinstr = dyn_cast<GetElementPtrInst>(ldinstr->getPointerOperand());
+    if (!ptrinstr)
+      return false;
+
+    Value *baseptr = nullptr;
+
+    // Get array dimension
+    //
+    // In case of an indirectional layout (pointer-to-pointer array)
+    // track back the base pointer recursively
+    //
+    // Layout:
+    //
+    // %a = getelementptr inbounds iY** %baseptr, iX dimension_n
+    // %10 = load i8** %a, align 8
+    // %b = getelementptr inbounds iY* %10, iX dimension_m
+    // %bar = load i8* %b, align 1
+    //
+    unsigned arraysize = getArrayDimension(ldinstr, &baseptr);
+
+    bool is2DLinear = false;
+
+    // Maybe array was linearized?
+    // -> Try to delinierize
+    if (arraysize == 1) {
+      const SCEV *idxscev = SE->getSCEV(ptrinstr);
+
+      if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(idxscev)) {
+        SmallVector<const SCEV *, 3> Subscripts, Sizes;
+
+        const SCEV *ElementSize = SE->getElementSize(ldinstr);
+        // Delinearize
+        AR->delinearize(*SE, Subscripts, Sizes, ElementSize);
+
+        if (Subscripts.size() == 0 || Sizes.size() == 0 || Subscripts.size() != Sizes.size()) {
+          DEBUG(dbgs() << "Failed to delinearize: " << *idxscev << "\n";);
+        } else {
+
+          DEBUG({
+            dbgs() << "succeeded on delinearize array access\n";
+            dbgs() << "ArrayDecl[UnknownSize]";
+            for (const SCEV *S : Sizes)
+              dbgs() << "[" << *S << "]";
+
+            dbgs() << "\nArrayRef";
+            for (const SCEV *S : Subscripts)
+              dbgs() << "[" << *S << "]";
+            dbgs() << "\n";
+          });
+
+          arraysize = Subscripts.size();
+          is2DLinear = (arraysize == 2);
+        }
+      }
+    } else if (arraysize > 2) {
+      errs() << "Cannot handle array size > 2\n";
+      return false;
+    }
+
+    DEBUG(dbgs() << "Array size: " << arraysize << "\n");
+
+    if (ldinstr->getType()->isFloatingPointTy()) {
+      KernelSource = baseptr;
+      DEBUG({
+        dbgs() << "Coefficient source: ";
+        baseptr->dump();
+      });
+    } else if (ldinstr->getType()->isIntegerTy()) {
+
+      PixelSource = baseptr;
+      DEBUG({
+        dbgs() << "Pixel source: ";
+        baseptr->dump();
+      });
+
+    } else
+      return false;
+  }
+
+  return true;
+}
+
 bool ConvolutionCheck::isConvolution() {
+
   // Check if loop is most inner loop
   if (L->getSubLoops().size() > 0) {
     DEBUG(errs() << DEBUG_TYPE << ":"
@@ -233,221 +344,213 @@ bool ConvolutionCheck::isConvolution() {
   BasicBlock *PreHeader = L->getLoopPreheader();
   BasicBlock *Header = L->getHeader();
 
-  Value *ConvolveStartValue = nullptr;
+  Function* F = Header->getParent();
 
-  Value *CoefficientSrc = nullptr;
-  Value *PixelSrc = nullptr;
-  Value *WindowSizeParam = nullptr;
-
-  for (Loop::block_iterator bb = L->block_begin(), be = L->block_end(); bb != be; ++bb) {
-    for (BasicBlock::iterator it = (*bb)->begin(), end = (*bb)->end(); it != end; ++it) {
-      if (PHINode *Phi = dyn_cast<PHINode>(it)) {
-        Type *PhiTy = Phi->getType();
-        // Check if this node is a lcssa node
-        if (!PhiTy->isIntegerTy() && !PhiTy->isFloatingPointTy() && !PhiTy->isPointerTy()) {
-          dbgs() << "Optdetect: Found an non-int non-pointer PHI.\n";
-          return false;
-        }
-
-        // We only allow if-converted PHIs with exactly two incoming values.
-        if (Phi->getNumIncomingValues() != 2) {
-          DEBUG(dbgs() << "Found an invalid PHI node.\n");
-          return false;
-        }
-
-        Value *StartValue = Phi->getIncomingValueForBlock(PreHeader);
-
-        InductionKind iKind = isInductionVariable(Phi);
-
-        if (IK_NoInduction != iKind)
-          continue; // TODO handle different kind of induction variables
-
-        if (Phi->getNumIncomingValues() != 2)
-          return false;
-
-        // Reduction variables are only found in the loop header block.
-        if (Phi->getParent() != L->getHeader())
-          return false;
-
-        // Receive potential convolution start value from pre header block
-        Value *RdxStart = Phi->getIncomingValueForBlock(L->getLoopPreheader());
-        // ------------------------------------------------------------------
-        // ------------------------------------------------------------------
-        if (PHINode *_rdxstart = dyn_cast<PHINode>(RdxStart))
-          if (_rdxstart->getParent() == parent->getHeader()) {
-            Value *rdxinitvalue = _rdxstart->getIncomingValueForBlock(parent->getLoopPreheader());
-
-            // Convolution start value has to be defined as zero
-            if (ConstantFP *fpstartval = dyn_cast<ConstantFP>(rdxinitvalue))
-              if (!fpstartval->isZero())
-                return false;
-
-            if (ConstantInt *intstartval = dyn_cast<ConstantInt>(rdxinitvalue))
-              if (!intstartval->isZero())
-                return false;
-            ConvolveStartValue = rdxinitvalue;
-            errs() << "Convolution start value: " << *rdxinitvalue << "\n";
-          }
-
-        // ------------------------------------------------------------------
-        // ------------------------------------------------------------------
-        SmallPtrSet<Instruction *, 8> VisitedInstr;
-        SmallVector<Instruction *, 8> Worklist;
-        Worklist.push_back(Phi);
-        VisitedInstr.insert(Phi);
-
-        Instruction *ExitAccInstruction = nullptr;
-
-        // Check cycle
-        while (!Worklist.empty()) {
-          Instruction *Cur = Worklist.pop_back_val();
-
-          if (Cur->use_empty())
-            return false;
-
-          for (User *U : Cur->users()) {
-            Instruction *instr = cast<Instruction>(U);
-
-            // Check if instruction has an external user. In this case it is the
-            // exit instruction that completes the reduction cycle
-            if (!L->contains(instr->getParent())) {
-              unsigned opcode = Cur->getOpcode();
-              // Convolution requires an additive reduction instruction
-              if (opcode != Instruction::Add && opcode != Instruction::FAdd)
-                return false;
-
-              Instruction *coeffmultop = nullptr;
-
-              if (dyn_cast<PHINode>(Cur->getOperand(0)) == Phi)
-                coeffmultop = cast<Instruction>(Cur->getOperand(1));
-              else if (dyn_cast<PHINode>(Cur->getOperand(1)) == Phi)
-                coeffmultop = cast<Instruction>(Cur->getOperand(0));
-              else
-                return false;
-
-              if (coeffmultop->getOpcode() == Instruction::Mul || coeffmultop->getOpcode() == Instruction::FMul)
-                // Check which operand corresponds to the coeffient
-            	for (Use &u : coeffmultop->operands()) {
-                  Value *op = u.get();
-
-                  LoadInst *ldinstr = trackbackOperandRec(op);
-                  if (!ldinstr)
-                    return false;
-
-                  GetElementPtrInst *ptrinstr = dyn_cast<GetElementPtrInst>(ldinstr->getPointerOperand());
-                  if (!ptrinstr)
-                    return false;
-
-                  Value *baseptr = nullptr;
-
-                  // Check weather array has an indirectional layout
-                  unsigned arraysize = isIndirectionArrayAccess(ldinstr, &baseptr);
-
-                  // Maybe array was linearized, then try to delinierized
-                  if (arraysize == 1) {
-                    const SCEV *idxscev = SE->getSCEV(ptrinstr);
-
-                    if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(idxscev)) {
-                      SmallVector<const SCEV *, 3> Subscripts, Sizes;
-
-                      const SCEV *ElementSize = SE->getElementSize(ldinstr);
-                      AR->delinearize(*SE, Subscripts, Sizes, ElementSize);
-
-                      if (Subscripts.size() == 0 || Sizes.size() == 0 || Subscripts.size() != Sizes.size()) {
-                        DEBUG(dbgs() << "Failed to delinearize: " << *idxscev << "\n";);
-                      } else {
-                        DEBUG({
-                          dbgs() << "succeeded to delinearize: " << *AR << "\n";
-                          dbgs() << "ArrayDecl[UnknownSize]";
-                          for (const SCEV *S : Sizes)
-                            dbgs() << "[" << *S << "]";
-
-                          dbgs() << "\nArrayRef";
-                          for (const SCEV *S : Subscripts)
-                            dbgs() << "[" << *S << "]";
-                          dbgs() << "\n";
-                        });
-                        arraysize = Subscripts.size();
-                      }
-                    }
-                  }
-
-                  DEBUG(dbgs() << "Array size: " << arraysize << "\n");
-
-                  WindowSizeParam = getWindowSizeValue();
-
-                  if (WindowSizeParam) {
-                    dbgs() << "Found window size: " << *WindowSizeParam << "\n";
-                    Function *Fcn = Header->getParent();
-                    bool isFormalParam = false;
-
-                    for (Argument &arg : Fcn->getArgumentList()) {
-                      if ((dyn_cast<Value>(&arg)) == WindowSizeParam) {
-                        isFormalParam = true;
-                        break;
-                      }
-                    }
-
-                    if (isFormalParam) {
-                      dbgs() << "Window size is formal parameter: " << WindowSizeParam->getName() << "\n";
-                    }
-                  }
-
-                  if (ldinstr->getType()->isFloatingPointTy()) {
-                    CoefficientSrc = baseptr;
-                    DEBUG({
-                      dbgs() << "Coefficient source: ";
-                      baseptr->dump();
-                    });
-                  } else if (ldinstr->getType()->isIntegerTy()) {
-                    PixelSrc = baseptr;
-                    DEBUG({
-                      dbgs() << "Pixel source: ";
-                      baseptr->dump();
-                    });
-                  } else
-                    return false;
-                }
-
-              if (ExitAccInstruction != nullptr || Cur == Phi)
-                return false;
-
-              // @see Loop Vectorizer
-              // The instruction used by an outside user must be the last
-              // instruction
-              // before we feed back to the reduction phi. Otherwise, we loose
-              // VF-1
-              // operations on the value.
-              if (std::find(Phi->op_begin(), Phi->op_end(), Cur) == Phi->op_end())
-                return false;
-
-              ExitAccInstruction = Cur;
-            }
-            if (VisitedInstr.insert(instr).second)
-              Worklist.push_back(instr);
-          }
-        }
-      }
-    }
+  if(F->getReturnType()->getTypeID() != Type::VoidTyID)
+  {
+	  DEBUG(errs() << DEBUG_TYPE << ":"
+	                   << "Convolution kernel has non void return type\n");
   }
+
+  Value		   *ConvolveStartValue = nullptr;
+  Value		   *ConvolveEndValue   = nullptr;
+  Instruction *ExitAccInstruction  = nullptr;
+  bool CycleComplete = false;
+
+  for (Loop::block_iterator bb = L->block_begin(), be = L->block_end(); bb != be; ++bb)
+    for (BasicBlock::iterator it = (*bb)->begin(), end = (*bb)->end(); it != end; ++it) {
+      PHINode *Phi = dyn_cast<PHINode>(it);
+
+      if (!Phi)
+        continue;
+
+      Type *PhiTy = Phi->getType();
+      // Check if this node is a lcssa node
+      if (!PhiTy->isIntegerTy() && !PhiTy->isFloatingPointTy() && !PhiTy->isPointerTy()) {
+        dbgs() << "Optdetect: Found an non-int non-pointer PHI.\n";
+        return false;
+      }
+
+      // We only allow if-converted PHIs with exactly two incoming values.
+      if (Phi->getNumIncomingValues() != 2) {
+        DEBUG(dbgs() << "Found invalid PHI node.\n");
+        return false;
+      }
+
+      Value *StartValue = Phi->getIncomingValueForBlock(PreHeader);
+
+      InductionKind iKind = isInductionVariable(Phi);
+
+      if (IK_NoInduction != iKind)
+        continue;
+
+      if (Phi->getNumIncomingValues() != 2)
+        return false;
+
+      // Reduction variables are only found in the loop header block.
+      if (Phi->getParent() != L->getHeader())
+        return false;
+
+      // Receive potential convolution start value from pre header block
+      Value *RdxStart = Phi->getIncomingValueForBlock(L->getLoopPreheader());
+	  Value *rdxinitvalue;
+      Value *rdxendvalue;
+      // ------------------------------------------------------------------
+      // ------------------------------------------------------------------
+      if (PHINode *_rdxstart = dyn_cast<PHINode>(RdxStart))
+        if (_rdxstart->getParent() == parent->getHeader()) {
+          rdxinitvalue = _rdxstart->getIncomingValueForBlock(parent->getLoopPreheader());
+
+          // Get value from the last block before backedge was taken
+          rdxendvalue  = _rdxstart->getIncomingValueForBlock(parent->getLoopLatch());
+
+          // Convolution start value has to be defined as zero
+          if (ConstantFP *fpstartval = dyn_cast<ConstantFP>(rdxinitvalue))
+            if (!fpstartval->isZero())
+              return false;
+
+          if (ConstantInt *intstartval = dyn_cast<ConstantInt>(rdxinitvalue))
+            if (!intstartval->isZero())
+              return false;
+
+          ConvolveStartValue = rdxinitvalue;
+
+          // Check if exit instruction lands in a
+          // store operation
+          for (User *u : rdxendvalue->users()) {
+            Instruction *instr = dyn_cast<Instruction>(u);
+
+            // If user is phi instruction on exit block
+            // on the outer loop, then track this value further
+            if (instr && isa<PHINode>(instr) &&
+                parent->getExitBlock() &&
+				instr->getParent() == parent->getExitBlock()) {
+              PHINode *phi = cast<PHINode>(instr);
+              if (phi->getNumIncomingValues() > 1)
+                continue;
+            }
+          }
+
+          errs() << "Convolution start value: " << *rdxinitvalue << "\n";
+        }
+
+      // ------------------------------------------------------------------
+      // ------------------------------------------------------------------
+
+      // Check if outer loop has the same iteration count
+      // as the inner loop
+      const SCEV *innerBETakenCount = SE->getBackedgeTakenCount(L);
+      const SCEV *outerBETakenCount = SE->getBackedgeTakenCount(parent);
+
+      if (innerBETakenCount != outerBETakenCount) {
+        dbgs() << "Loops does not cover rectangular area\n";
+        dbgs() << innerBETakenCount << " != " << outerBETakenCount << "\n";
+        return false;
+      }
+
+      // ------------------------------------------------------------------
+      // ------------------------------------------------------------------
+      SmallPtrSet<Instruction *, 8> VisitedInstr;
+      SmallVector<Instruction *, 8> Worklist;
+      Worklist.push_back(Phi);
+      VisitedInstr.insert(Phi);
+
+      // Check cycle
+      while (!Worklist.empty()) {
+        Instruction *Cur = Worklist.pop_back_val();
+        dbgs() << "Worklist cur is: ";
+        Cur->dump();
+
+        if (Cur->use_empty())
+          return false;
+
+        for (User *U : Cur->users()) {
+          Instruction *instr = cast<Instruction>(U);
+
+          // Check if instruction has an external user. In this case it is the
+          // exit instruction that completes the reduction cycle
+          if (!L->contains(instr->getParent()) && L->getUniqueExitBlock() == instr->getParent()) {
+            unsigned opcode = Cur->getOpcode();
+            dbgs() << "External use: ";
+            instr->dump();
+
+            // Convolution requires an additive reduction instruction
+            if (opcode != Instruction::Add && opcode != Instruction::FAdd)
+              continue;
+
+            Instruction *coeffmultop = nullptr;
+
+            // Get operand which is not the accumulated value
+            // from the iteration before
+            if (dyn_cast<PHINode>(Cur->getOperand(0)) == Phi)
+              coeffmultop = cast<Instruction>(Cur->getOperand(1));
+            else if (dyn_cast<PHINode>(Cur->getOperand(1)) == Phi)
+              coeffmultop = cast<Instruction>(Cur->getOperand(0));
+            else
+              return false;
+
+            if (coeffmultop->getOpcode() == Instruction::Mul || coeffmultop->getOpcode() == Instruction::FMul)
+            	if(!getMemorySources(coeffmultop))
+            		return false;
+            else
+            	return false;	// Expression not understood
+
+            if (ExitAccInstruction != nullptr || Cur == Phi)
+              return false;
+
+            // @see Loop Vectorizer
+            // The instruction used by an outside user must be the last
+            // instruction
+            // before we feed back to the reduction phi. Otherwise, we loose
+            // VF-1 operations on the value.
+            if (std::find(Phi->op_begin(), Phi->op_end(), Cur) == Phi->op_end())
+              return false;
+
+            ExitAccInstruction = Cur;
+
+            if!(getMemorySink(ExitAccInstruction)) // Get memory sink for this value
+            		return false;
+
+            continue;
+          }
+
+
+          if (VisitedInstr.insert(instr).second)
+            Worklist.push_back(instr);
+
+          // Remember that we completed the cycle.
+          if (U == Phi){
+            CycleComplete = true;
+            dbgs() << "Cycle complete\n";
+          }
+        } // end iterating users
+      } // end iterating worklist
+    } // end iterating BBs/Instructions
+
+  // Receive window size parameter from
+  // loop iteration count
+  WindowSize = getWindowSizeValue();
+
+  if(!CycleComplete && !ExitAccInstruction && !valid())
+	  return false;
 
   return true;
 }
 
-unsigned ConvolutionCheck::isIndirectionArrayAccess(const LoadInst *instr, Value **baseptr) {
+unsigned ConvolutionCheck::getArrayDimension(const LoadInst *instr, Value **baseptr) {
   GetElementPtrInst *ptrinstr = dyn_cast<GetElementPtrInst>(instr->getOperand(0));
   if (!ptrinstr)
     return 0;
   // Check if operand is derived by another load
   if (LoadInst *ldinstr = dyn_cast<LoadInst>(ptrinstr->getOperand(0)))
-    return isIndirectionArrayAccess(ldinstr, baseptr) + 1;
+    return getArrayDimension(ldinstr, baseptr) + 1;
 
   *baseptr = ptrinstr->getOperand(0);
   return 1;
 }
 
 unsigned ConvolutionCheck::getPointerDepth(const Type *T) {
-  if (T->isPointerTy() && T->getNumContainedTypes() && T->getContainedType(0)->isPointerTy())
+  if (T->isPointerTy() && T->getNumContainedTypes())
     return getPointerDepth(T->getContainedType(0)) + 1;
 
   return T->isPointerTy() ? 1 : 0;
@@ -465,6 +568,8 @@ LoadInst *ConvolutionCheck::trackbackOperandRec(Value *rhs) {
 
   unsigned opcode = instr->getOpcode();
 
+  // Ignore type conversion from Int to Float
+  // Ignore Zero/Sign extend
   if (opcode == Instruction::SIToFP || opcode == Instruction::UIToFP || opcode == Instruction::ZExt) {
     if (instr->getNumOperands() == 1)
       return trackbackOperandRec(instr->getOperand(0));
@@ -500,10 +605,9 @@ ConvolutionCheck::InductionKind ConvolutionCheck::isInductionVariable(PHINode *P
   return IK_NoInduction;
 }
 
-Function *ConvolutionCheck::addUseAcceleratorPredicate(Function &F) {
+Function *ConvolutionCheck::addUseAcceleratorPredicate(Module* m) {
   std::string name = "UseAccelerator";
 
-  Module *m = F.getParent();
   // Check if "UseAccelerator" predicate is already defined
   if (Function *fcn = m->getFunction(name))
     return fcn;
@@ -522,6 +626,111 @@ Function *ConvolutionCheck::addUseAcceleratorPredicate(Function &F) {
   Builder.CreateRet(ConstantInt::get(IntegerType::getInt1Ty(modulectx), 1, false));
 
   return fcn;
+}
+
+Function* ConvolutionCheck::addBypass(Function& F){
+
+	if(!valid())
+		return nullptr;
+
+	Module *m = F.getParent();
+	LLVMContext &modulectx = m->getContext();
+
+	Function* usepredicate = addUseAcceleratorPredicate(m);
+
+	BasicBlock& entry = F.getEntryBlock();
+
+	// Create an upstream decision block
+	BasicBlock *BBBypassDec = BasicBlock::Create(modulectx, "entry0", &F, &entry);
+
+	// Create accelerator call site
+	BasicBlock *BBBypass    = BasicBlock::Create(modulectx, "acc", &F, &entry);
+
+	IRBuilder<> Builder(BBBypassDec);
+
+	// Branch to bypass if predicate evaluates to true
+	CallInst * bypasscall = Builder.CreateCall(usepredicate, "bypass"); // name only for debugging purpose
+	Builder.CreateCondBr(bypasscall, BBBypass, &entry);
+
+	Builder.SetInsertPoint(BBBypass);
+	// distinguish interface on parameter type
+
+	std::vector<Value*> args;
+	args.push_back(PixelSource);
+	args.push_back(PixelSink);
+	args.push_back(KernelSource);
+	args.push_back(WindowSize);
+	for(Value* v : IndexParams)
+		args.push_back(v);
+
+	Function* bypass_iface;
+	if(getPointerDepth(PixelSink->getType()) == 1)
+		bypass_iface = create_hw_iface0(m, args);
+	else if(getPointerDepth(PixelSink->getType()) == 2)
+		bypass_iface = create_hw_iface1(m, args);
+
+
+	Builder.CreateCall(bypass_iface, args);
+	Builder.CreateRetVoid();
+	return nullptr;
+}
+
+Function *ConvolutionCheck::create_hw_iface0(Module* m, ArrayRef<Value *> params){
+
+	LLVMContext &modulectx = m->getContext();
+
+	// Create bypass interface
+	std::vector<Type*> bypassargs;
+	bypassargs.push_back(Type::getInt8PtrTy(modulectx));	// Src (i8*)
+	bypassargs.push_back(Type::getInt8PtrTy(modulectx)); 	// Dst (i8*)
+	bypassargs.push_back(Type::getFloatPtrTy(modulectx));	// Kernel (float*)
+	bypassargs.push_back(Type::getInt32Ty(modulectx));		// Window size (i32)
+	bypassargs.push_back(Type::getInt32Ty(modulectx));		// x - coordinate (i32)
+	bypassargs.push_back(Type::getInt32Ty(modulectx));		// y - coordinate (i32)
+
+	FunctionType *fcnty = FunctionType::get(Type::getVoidTy(modulectx), bypassargs, false);
+	Function *bypass_iface = Function::Create(fcnty,
+												Function::ExternalLinkage,
+												bypass_iface_fcn_prefix + "0",
+												m);
+
+	return bypass_iface;
+
+}
+Function *ConvolutionCheck::create_hw_iface1(Module* m, ArrayRef<Value *> params){
+	LLVMContext &modulectx = m->getContext();
+
+	// Create bypass interface
+	std::vector<Type*> bypassargs;
+	bypassargs.push_back(PointerType::get(Type::getInt8PtrTy(modulectx), 0));	// Src (i8**)
+	bypassargs.push_back(PointerType::get(Type::getInt8PtrTy(modulectx), 0)); 	// Dst (i8**)
+	bypassargs.push_back(Type::getFloatPtrTy(modulectx));	// Kernel (float*)
+	bypassargs.push_back(Type::getInt32Ty(modulectx));		// Window size (i32)
+	bypassargs.push_back(Type::getInt32Ty(modulectx));		// x - coordinate (i32)
+	bypassargs.push_back(Type::getInt32Ty(modulectx));		// y - coordinate (i32)
+
+	FunctionType *fcnty = FunctionType::get(Type::getVoidTy(modulectx), bypassargs, false);
+	Function *bypass_iface = Function::Create(fcnty,
+												Function::ExternalLinkage,
+												bypass_iface_fcn_prefix + "1",
+												m);
+	return bypass_iface;
+}
+
+bool ConvolutionCheck::valid()
+{
+	bool valid = true;
+	// all parameters available
+	valid &= (WindowSize  && KernelSource &&
+			  PixelSource && PixelSink
+			  && !IndexParams.empty());
+
+	if(!valid)
+		return false;
+	// Input/output type is the same (type is immutable)
+	valid &= (PixelSource->getType() == PixelSink->getType());
+
+	return valid;
 }
 
 bool Optdetect::runOnFunction(Function &F) {
@@ -549,8 +758,8 @@ bool Optdetect::runOnFunction(Function &F) {
       break; // TODO: add error report
     ConvolutionCheck cv(L, SE);
 
-    cv.isConvolution();
-    cv.addUseAcceleratorPredicate(F);
+    if(cv.isConvolution())
+    	cv.addBypass(F);
   }
 
   return false;
