@@ -66,6 +66,11 @@ static cl::opt<bool> EnableConvIdiomsRecognition("enable-convolution-idioms", cl
 
 static cl::opt<bool> test_graph_isomoprh("test-graph-iso", cl::init(true), cl::Hidden, cl::desc("Bla, ein schalter."));
 
+static cl::opt<bool> view_scfg("view-scfg", cl::init(true), cl::Hidden, cl::desc("Bla, ein schalter. Foo"));
+
+static cl::opt<bool> serialize_pattern("serialize-pattern", cl::init(false), cl::Hidden,
+                                       cl::desc("Serialize each function as a pattern"));
+
 //=---------------------------------------------------------------------
 
 namespace {
@@ -725,33 +730,7 @@ bool ConvolutionCheck::getDataDimensionSize(Function *F, Loop *L, SmallVector<Va
           return false;
 
         D.push_back(unknowns[0]);
-        //    	  if(const SCEVAddExpr* SCADexpr = dyn_cast<SCEVAddExpr>(ExitValue)){
-        //    		  SmallVector<const SCEV*, 8> ops;
-        //    		  for(auto op : SCADexpr->operands())
-        //    			  ops.push_back(op);
-        //
-        //    		  ops.push_back(SE->getSignExtendExpr(SE->getUnknown(knhalf), ExitValue->getType()));
-        //
-        //    		  const SCEV* SIMPL = SE->getAddExpr(ops);
-        //    		  dbgs() << "Simplified: " << *SIMPL << "\n";
-        //    	  }
       }
-      //      const SCEV *doubleWindowSize = SE->getSignExtendExpr(SE->getMulExpr(SE->getConstant(knhalf->getType(), 2),
-      // SE->getUnknown(knhalf)), BEtakencount->getType());
-      //
-      //      dbgs() << "Backedge taken count\n";
-      //      BEtakencount->dump();
-      //
-      //      BEtakencount->getType()->dump();
-      //      doubleWindowSize->getType()->dump();
-      //
-      //	  const SCEV *NBEtakencount = SE->getAddExpr(BEtakencount, doubleWindowSize);
-      //      dbgs() << "NEW Backedge taken count\n";
-      //
-      //      if (NBEtakencount)
-      //    	  NBEtakencount->dump();
-      //      else
-      //        dbgs() << "null\n";
     }
 
     for (auto data_size : D)
@@ -962,210 +941,198 @@ Function *ConvolutionCheck::create_hw_iface1(Module *m) {
   return bypass_iface;
 }
 
-ExpressionTree *ExpressionTree::calculateExpressionTree(BasicBlock *BB, ScalarEvolution *SE, LoopInfo *LI) {
+ExpressionTree *ExpressionTree::calculateBranchExpression(BasicBlock *BB, ScalarEvolution *SE, LoopInfo *LI) {
+  TerminatorInst *term = BB->getTerminator();
 
-  ExpressionTree *T = nullptr;
+  if (BranchInst *branch = dyn_cast<BranchInst>(term)) {
 
-  for (BasicBlock::iterator bb = BB->begin(), be = BB->end(); bb != be; ++bb) {
+    if (branch->getNumSuccessors() < 2)
+      return nullptr;
+
+    CmpInst *cmp = dyn_cast<CmpInst>(branch->getOperand(0)); // get comparision
+
+    return calculateExpressionTree(cmp, SE, LI);
+
+  } else {
+    errs() << "Cannot compute branch expression from non branch instrucion" << *term << "\n";
+  }
+  return nullptr;
+}
+
+/// getLoopPhiForCounter - Return the loop header phi IFF IncV adds a loop
+/// invariant value to the phi.
+static PHINode *getLoopPhiForCounter(Value *IncV, Loop *L) {
+  Instruction *IncI = dyn_cast<Instruction>(IncV);
+  if (!IncI)
+    return nullptr;
+
+  switch (IncI->getOpcode()) {
+  case Instruction::Add:
+  case Instruction::Sub:
+    break;
+  case Instruction::GetElementPtr:
+    // An IV counter must preserve its type.
+    if (IncI->getNumOperands() == 2)
+      break;
+  default:
+    return nullptr;
+  }
+
+  PHINode *Phi = dyn_cast<PHINode>(IncI->getOperand(0));
+  if (Phi && Phi->getParent() == L->getHeader()) {
+    if (L->isLoopInvariant(IncI->getOperand(1)))
+      return Phi;
+    return nullptr;
+  }
+  if (IncI->getOpcode() == Instruction::GetElementPtr)
+    return nullptr;
+
+  // Allow add/sub to be commuted.
+  Phi = dyn_cast<PHINode>(IncI->getOperand(1));
+  if (Phi && Phi->getParent() == L->getHeader()) {
+    if (L->isLoopInvariant(IncI->getOperand(0)))
+      return Phi;
+  }
+  return nullptr;
+}
+
+static InductionDescription FindPotentialInduction(PHINode *phi, LoopInfo *LI, ScalarEvolution *SE) {
+
+  Loop *L = LI->getLoopFor(phi->getParent());
+
+  if (!L)
+    return {};
+
+  const SCEV *BECount = SE->getBackedgeTakenCount(L);
+  uint64_t BCWidth = SE->getTypeSizeInBits(BECount->getType());
+
+  assert(L->isLoopSimplifyForm() && "Loop is not in simplified form");
+
+  BasicBlock *Latch = L->getLoopLatch();
+
+  if (!SE->isSCEVable(phi->getType()))
+    return {};
+
+  if (BECount->getType()->isPointerTy() && !phi->getType()->isPointerTy())
+    return {};
+
+  const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(SE->getSCEV(phi));
+  if (!AR || AR->getLoop() != L || !AR->isAffine())
+    return {};
+
+  uint64_t PhiWidth = SE->getTypeSizeInBits(AR->getType());
+
+  // Avoid comparing an integer IV against a pointer Limit.
+  if (PhiWidth < BCWidth || !L->getHeader()->getParent()->getParent()->getDataLayout()->isLegalInteger(PhiWidth))
+    return {};
+
+  const SCEVConstant *Step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(*SE));
+  if (!Step || !Step->isOne())
+    return {};
+  ;
+
+  int LatchIdx = phi->getBasicBlockIndex(Latch);
+  Value *IncV = phi->getIncomingValue(LatchIdx);
+
+  if (getLoopPhiForCounter(IncV, L) != phi)
+    return {};
+
+  const SCEV *Init = AR->getStart();
+
+  // Canonicalize loop bound
+  // exit is one less than the actual trip count --> add one
+  const SCEV *Bound = SE->getAddExpr(BECount, SE->getConstant(BECount->getType(), 1, false));
+
+  if (Init && Step && Bound)
+    return { Init, Step, Bound };
+
+  return {};
+}
+
+ExpressionTree *ExpressionTree::calculateAssignmentSubtree(BasicBlock *BB, ScalarEvolution *SE, LoopInfo *LI) {
+
+  StoreInst *store = nullptr;
+
+  // Calculate assignment expression
+  for (auto bb = BB->begin(), be = BB->end(); bb != be; ++bb) {
 
     Instruction *inst = &*bb;
 
-    if (StoreInst *store = dyn_cast<StoreInst>(inst)) { // Check if instruction is possible left hand side of
-      T = new ExpressionTree();
-
-      ExpressionTreeNode *assignment = ExpressionTree::calculateAssignmentSubtree(T, store, SE, LI);
-    }
+    // Check if instruction is possible left hand side of
+    if (isa<StoreInst>(inst))
+      store = cast<StoreInst>(inst);
   }
 
-  return T;
+  if (!store)
+    return nullptr;
+
+  return calculateExpressionTree(store, SE, LI);
 }
 
-ExpressionTreeNode *ExpressionTree::calculateAssignmentSubtree(ExpressionTree *tree, StoreInst *store,
-                                                               ScalarEvolution *SE, LoopInfo *LI) {
+ExpressionTree *ExpressionTree::calculateExpressionTree(Instruction *inst, ScalarEvolution *SE, LoopInfo *LI) {
 
-  ExpressionTreeNode *assign_node = new ExpressionTreeNode(tree, ExpressionTreeNode::ASSIGN, store);
+  ExpressionTree *T = new ExpressionTree;
 
   SmallVector<std::pair<Value *, ExpressionTreeNode *>, 8> stack;
-
-  stack.push_back(std::make_pair(store, assign_node));
+  stack.push_back(std::make_pair(inst, nullptr));
 
   while (!stack.empty()) {
 
-    std::pair<Value *, ExpressionTreeNode *> tuple = stack.pop_back_val();
-    Value *val = tuple.first;
-    ExpressionTreeNode *CurNode = tuple.second;
+    auto stack_val = stack.pop_back_val();
+    Value *val = stack_val.first;
+    ExpressionTreeNode *CurNode = stack_val.second;
+
+    ExpressionTreeNode *node = nullptr;
 
     if (isa<Instruction>(val)) {
 
       Instruction *instr = cast<Instruction>(val);
 
-      switch (instr->getOpcode()) {
-      case Instruction::Store: {
+      if (PHINode *phi = dyn_cast<PHINode>(instr)) {
 
-        StoreInst *store = dyn_cast<StoreInst>(instr);
-
-        Value *addressptr = store->getPointerOperand();
-        Value *value = store->getValueOperand();
-
-        stack.push_back(std::make_pair(addressptr, assign_node));
-        stack.push_back(std::make_pair(value, assign_node));
-
-        break;
-      }
-
-      case Instruction::Load: {
-
-        LoadInst *load = dyn_cast<LoadInst>(instr);
-
-        Value *addressptr = load->getPointerOperand();
-
-        stack.push_back(std::make_pair(addressptr, CurNode));
-
-        break;
-      }
-      case Instruction::GetElementPtr: {
-
-        GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(instr);
-        Value *ptrop = gep->getPointerOperand();
-        Type *ty = gep->getPointerOperandType();
-
-        // Type is [m x [n  x [ o x footype] ] ]
-        if (ty->isArrayTy()) {
-
-        }
-        // Type is footype *...*
-        else if (ty->isPointerTy()) {
-        }
-
-        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::SUBSCRIPT, gep);
-        CurNode->add_child(CurNode->begin(), node);
-
-        for (Use &U : gep->operands()) {
-          Value *operand = U.get();
-          stack.push_back(std::make_pair(operand, node));
-        }
-
-        break;
-      }
-      case Instruction::Add:
-      case Instruction::FAdd: {
-
-        Operator *instr = cast<Operator>(val);
-        // XXX: adding nodes to stack is always the same -> refactor
-        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::ADD, val);
-
-        CurNode->add_child(CurNode->end(), node);
-
-        for (Use &U : instr->operands()) {
-          Value *operand = U.get();
-          stack.push_back(std::make_pair(operand, node));
-        }
-
-        break;
-      }
-      case Instruction::Mul:
-      case Instruction::FMul: {
-        Operator *instr = cast<Operator>(val);
-
-        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::MUL, val);
-
-        CurNode->add_child(CurNode->end(), node);
-
-        for (Use &U : instr->operands()) {
-          Value *operand = U.get();
-          stack.push_back(std::make_pair(operand, node));
-        }
-        break;
-      }
-      case Instruction::SIToFP: {
-
-        SIToFPInst *instr = cast<SIToFPInst>(val);
-        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::ITOF, val);
-
-        CurNode->add_child(CurNode->end(), node);
-
-        for (Use &U : instr->operands()) {
-          Value *operand = U.get();
-          stack.push_back(std::make_pair(operand, node));
-        }
-        break;
-      }
-
-      case Instruction::Trunc: {
-
-        TruncInst *instr = cast<TruncInst>(val);
-        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::TRUNC, val);
-
-        CurNode->add_child(CurNode->end(), node);
-
-        for (Use &U : instr->operands()) {
-          Value *operand = U.get();
-          stack.push_back(std::make_pair(operand, node));
-        }
-
-        break;
-      }
-      case Instruction::ZExt: {
-
-        ZExtInst *instr = cast<ZExtInst>(val);
-        ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::SEXT, val);
-
-        CurNode->add_child(CurNode->end(), node);
-
-        for (Use &U : instr->operands()) {
-          Value *operand = U.get();
-          stack.push_back(std::make_pair(operand, node));
-        }
-
-        break;
-      }
-
-      case Instruction::PHI: {
-
-        PHINode *phi = cast<PHINode>(val);
         Loop *L = LI->getLoopFor(phi->getParent());
 
-        if (phi == L->getCanonicalInductionVariable()) {
-          const SCEV *scev = SE->getSCEV(phi);
+        InductionDescription idesc = FindPotentialInduction(phi, LI, SE);
 
-          if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(scev)) {
+        if (idesc.valid())
+          node = new ExpressionTreeNode(phi, idesc);
+        else
+          node = new ExpressionTreeNode(phi);
 
-            const SCEVConstant *step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(*SE));
+      } else if (isa<CallInst>(instr)) {
+        errs() << "Call functions not supported, please inline!\n";
+        delete T;
+        return nullptr;
 
-            assert(step != nullptr && "Step count of induction is not constant");
+      } else {
+        node = new ExpressionTreeNode(val);
+      }
 
-            ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::INDUCTION, phi, step);
-            CurNode->add_child(CurNode->begin(), node);
-
-            dbgs() << "Is induction value: " << *phi << "\n";
-            dbgs() << "Steps by: " << *step << "\n";
-          }
+      if (!node->isInductionValue())
+        for (Use &U : instr->operands()) {
+          Value *operand = U.get();
+          stack.push_back(std::make_pair(operand, node)); // visit each operand
         }
-        break;
-      }
-
-      default:
-        dbgs() << "Dont know how to handle " << *val << "\n";
-      }
     } else if (isa<Constant>(val)) {
 
       Constant *_const = dyn_cast<Constant>(val);
 
-      ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::CONST, _const);
-
-      CurNode->add_child(CurNode->begin(), node);
-
+      node = new ExpressionTreeNode(_const);
     } else if (isa<Argument>(val)) {
 
       Argument *arg = dyn_cast<Argument>(val);
 
-      ExpressionTreeNode *node = new ExpressionTreeNode(tree, ExpressionTreeNode::VAR, arg);
+      node = new ExpressionTreeNode(arg);
+    }
 
-      CurNode->add_child(CurNode->begin(), node);
+    if (nullptr != node) {
+      T->add_node(node);
+      if (CurNode != nullptr)
+        CurNode->add_child(CurNode->begin(), node);
     }
   }
 
-  return assign_node;
+  return T;
 }
 
 bool ConvolutionCheck::valid() {
@@ -1192,10 +1159,6 @@ bool ConvolutionCheck::valid() {
 
 bool Optmigrate::runOnFunction(Function &F) {
 
-  if (test_graph_isomoprh) {
-    GraphMatcher<SomeGraph*>::test_();
-    return false;
-  }
   LoopInfo *LI = &getAnalysis<LoopInfo>();
   ScalarEvolution *SE = &getAnalysis<ScalarEvolution>();
   DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
@@ -1215,15 +1178,54 @@ bool Optmigrate::runOnFunction(Function &F) {
 
       dbgs() << "Checking \"" << F.getName() << "\" for matrix-multiply-like operation\n";
 
-      //      std::vector<ExpressionTree *> expressions;
+      const SCFG *G = SCFG::createSimplifiedCFG(&F, *LI, *SE, *DT);
+      const SCFG *H = nullptr;
 
-      //      ExpressionTree::calculateGeneralExpressionTree(&F, expressions, SE, LI);
+      if (view_scfg)
+        llvm::ViewGraph<const SCFG *>(G, "foo", false, "Abstract control flow graph of " + F.getName());
 
-      const SCFG *foo = SCFG::createSimplifiedCFG(&F, LI, SE);
-      llvm::ViewGraph<const SCFG *>(foo, "foo", false, "Abstract control flow graph of " + F.getName());
-      //        llvm::ViewGraph<const ExpressionTree *>(tree, "foo", false, "Expression tree in " + F.getName());
+      if (serialize_pattern) {
+        SCFG::serialize(G, std::string(F.getName()) + ".json");
+        return false;
+      }
+      std::ifstream ifs("pattern.json", std::ifstream::in);
+      H = SCFG::deserialize(ifs);
 
-      foo->serialize(std::string(F.getName()) + ".json");
+      if (!H)
+        return false;
+
+      if (view_scfg)
+        llvm::ViewGraph<const SCFG *>(H, "foo", false, "Pattern");
+
+      GraphMatcher<SCFG> cfgm;
+      typedef GraphMatcher<SCFG>::AssignmentT NodeAssignmentT;
+      std::vector<NodeAssignmentT *> assignments;
+
+      if (cfgm.find_isomorphisms(G, H, assignments)) {
+        for (NodeAssignmentT *assignment : assignments) {
+
+          cfgm.print_assignment(dbgs(), *assignment);
+
+          cfgm.show_matching_graph(G, H, *assignment);
+
+          GraphMatcher<ExpressionTree> exprm;
+
+          auto fn = [](ExpressionTreeNode* n1, ExpressionTreeNode* n2) ->bool { return true;};
+
+          for (auto I = assignment->begin(), IE = assignment->end(); I != IE; ++I) {
+            // Match assignments
+            const ExpressionTree *T1 = ((*I).first)->getAssignmentExpression();  // Pattern expression
+            const ExpressionTree *T2 = ((*I).second)->getAssignmentExpression(); // Pattern in cadidate block
+
+            exprm.match_binary_trees(T1, T2, fn);
+          }
+        }
+      }
+    }
+
+    if (test_graph_isomoprh) {
+
+      GraphMatcher<SomeGraph>::test_();
     }
   }
 

@@ -41,9 +41,8 @@
 #include "llvm/IR/IRBuilder.h"
 
 #include "ExpressionTree.h"
-#include "CFG.h"
-
 #include "GraphMatching.h"
+#include "SCFG.h"
 
 using namespace llvm;
 
