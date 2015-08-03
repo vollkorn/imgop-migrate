@@ -1,1 +1,1 @@
-add_library( optmigrate SHARED Optmigrate.cpp)
+add_library( optmigrate SHARED  Optmigrate.cpp AbstractCFG.cpp Expression.cpp Pattern.cpp)

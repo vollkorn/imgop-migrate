@@ -23,7 +23,7 @@ using namespace llvm;
 using jsoncons::json;
 using jsoncons::pretty_printer;
 
-namespace {
+namespace optmig {
 
 struct DefaultJSONGraphTraits {
 
@@ -70,7 +70,7 @@ struct JSONGraphTraits : public DefaultJSONGraphTraits {
 
 } // end anonymous namespace
 
-namespace {
+namespace optmig {
 
 template <typename GraphType> class JSONGraphWriter {
 
@@ -90,9 +90,11 @@ private:
 public:
   JSONGraphWriter(raw_ostream &o, const GraphType &g, bool SN) : O(o), G(g) { JTraits = JSONTraits(); }
 
-  void writeGraph(const std::string &Title = "") {
-    json graph;
-    json graph_arr(json::an_array);
+  void writeGraph() {
+	json obj;
+	obj["name"] = JTraits.getGraphName(*G);
+	obj["graph"] = json::an_array;
+    json& graph = obj["graph"];
 
     json nodes;
     json nodes_arr(json::an_array);
@@ -107,13 +109,11 @@ public:
     writeEdges(edges_arr);
     edges["edges"] = edges_arr;
 
-    graph_arr.add(nodes);
-    graph_arr.add(edges);
-    graph["graph"] = graph_arr;
-
+    graph.add(nodes);
+    graph.add(edges);
 
 	std::stringstream _sstream;
-    _sstream << pretty_print(graph);
+    _sstream << pretty_print(obj);
 
     O << _sstream.str();
   }
@@ -177,7 +177,7 @@ private:
 };
 
 template <typename GraphType>
-std::string WriteJSONGraph(const GraphType &G, const std::string &Name, const std::string &Title = "") {
+std::string WriteJSONGraph(const GraphType &G, const std::string &Name) {
   int FD = -1;
 
   SmallString<128> Filename;
@@ -193,7 +193,7 @@ std::string WriteJSONGraph(const GraphType &G, const std::string &Name, const st
 
   JSONGraphWriter<GraphType> JSONWriter(O, G, false);
 
-  JSONWriter.writeGraph(Title);
+  JSONWriter.writeGraph();
 
   O.close();
 
