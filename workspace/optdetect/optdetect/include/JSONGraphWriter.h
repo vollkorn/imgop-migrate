@@ -41,7 +41,7 @@ struct DefaultJSONGraphTraits {
   ///   "foo" : 2.0
   /// }
   ///
-  template <typename GraphType> static std::string getGraphProperties(const GraphType &) { return ""; }
+  template <typename GraphType> static std::string getGraphAttributes(const GraphType &) { return ""; }
 
   /// If you want to specify custom node attributes, this is the place to do so
   ///
@@ -93,6 +93,7 @@ public:
   void writeGraph() {
 	json obj;
 	obj["name"] = JTraits.getGraphName(*G);
+
 	obj["graph"] = json::an_array;
     json& graph = obj["graph"];
 
@@ -180,9 +181,9 @@ template <typename GraphType>
 std::string WriteJSONGraph(const GraphType &G, const std::string &Name) {
   int FD = -1;
 
-  SmallString<128> Filename;
-  std::error_code EC = sys::fs::createTemporaryFile(Name, "json", FD, Filename);
-
+  std::string Filename = Name + ".json";
+//  std::error_code EC = sys::fs::createTemporaryFile(Name, "json", FD, Filename);
+  std::error_code EC = sys::fs::openFileForWrite(Filename, FD, sys::fs::OpenFlags::F_RW);
   if (EC) {
     errs() << "Error: " << EC.message() << "\n";
     return "";
@@ -199,7 +200,7 @@ std::string WriteJSONGraph(const GraphType &G, const std::string &Name) {
 
   errs() << " done. \n";
 
-  return Filename.str();
+  return Filename;
 }
 }
 

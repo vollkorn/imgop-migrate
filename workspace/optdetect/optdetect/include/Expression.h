@@ -41,25 +41,51 @@ struct InductionDescription {
 
 private:
   const SCEV *Start = nullptr;
-  const SCEVConstant *Step = nullptr;
-  const SCEV *End = nullptr;
+  const SCEV *Step = nullptr;
+  const SCEV *Exit = nullptr;
 
 public:
+  enum MapResult {
+    IDesc_Map_Ok,
+    IDesc_Map_Invalid,
+    IDesc_Map_Resolve_Exit
+  };
+
   InductionDescription() {}
 
-  InductionDescription(const SCEV *Start, const SCEVConstant *Step, const SCEV *End) {
+  InductionDescription(const SCEV *Start, const SCEV *Step, const SCEV *Exit) {
     this->Start = Start;
     this->Step = Step;
-    this->End = End;
+    this->Exit = Exit;
   }
 
   const SCEV *getInit() { return Start; }
-  const SCEVConstant *getStep() { return Step; }
-  const SCEV *getEnd() { return End; }
+  const SCEV *getStep() { return Step; }
+  const SCEV *getExit() { return Exit; }
 
-  bool valid() const { return Start != nullptr && Step != nullptr && End != nullptr; }
+  bool valid() const { return Start != nullptr && Step != nullptr && Exit != nullptr; }
 
-  void print(raw_ostream &O) const { O << "(" << *Start << ", " << *Step << ", " << *End << ")"; }
+  void print(raw_ostream &O) const { O << "(" << *Start << ", " << *Step << ", " << *Exit << ")"; }
+
+  MapResult map_to(const InductionDescription &other) const{
+
+    bool match = true;
+
+    match &= (Start == other.Start);
+    match &= (Step == other.Step);
+
+    if (!match)
+      return IDesc_Map_Invalid;
+
+    if (isa<SCEVConstant>(Exit) && isa<SCEVConstant>(other.Exit))
+      if (Exit == other.Exit && match)
+        return IDesc_Map_Ok;
+
+    if (match)
+      return IDesc_Map_Resolve_Exit;
+
+    return IDesc_Map_Invalid;
+  }
 };
 }
 
@@ -71,7 +97,6 @@ class AbstractCFGNode;
 
 class Expression {
   friend class AbstractCFGNode;
-  friend class ExpressionNode;
 
 private:
   void delete_recursive(ExpressionNode *node);
@@ -90,6 +115,8 @@ public:
 
   const ExpressionNode *getRoot() const { return *(nodes_begin()); }
 
+  AbstractCFGNode *get_parent() const { return Parent; }
+
   void setRoot(ExpressionNode *node);
 
   ExpressionNode *getNodeFor(Value *v);
@@ -98,21 +125,23 @@ public:
 
   static Expression *calculateBranchExpression(BasicBlock *BB, ScalarEvolution *SE, LoopInfo *LI);
 
-  static Expression *deserialize(BasicBlock *BB, const std::string &str, ScalarEvolution *SE) {
+  static Expression *deserialize(BasicBlock *BB, const std::string &str, ScalarEvolution *SE,
+          std::map<u_int64_t, ExpressionNode*> &lazyReferences) {
 
     json v = json::parse_string(str);
-    return deserialize(BB, v, SE);
+    return deserialize(BB, v, SE, lazyReferences);
   }
 
-  static ExpressionNode *deserialize_rec(BasicBlock *BB, Expression *T, json &curr, json &G, ScalarEvolution *SE);
+  static ExpressionNode *deserialize_rec(BasicBlock *BB, Expression *T, json &curr, json &G, ScalarEvolution *SE, std::map<u_int64_t, ExpressionNode*> &lazy_references);
 
-  static Type *getTypeFromString(LLVMContext &context, const std::string &str);
+  static Type *type_from_str(LLVMContext &context, std::string &str);
 
-  static Expression *deserialize(BasicBlock *BB, json &obj, ScalarEvolution *SE);
+  static Expression *deserialize(BasicBlock *BB, json &obj, ScalarEvolution *SE, std::map<u_int64_t, ExpressionNode*> &lazyReferences);
 
 private:
   void add_node(ExpressionNode *node);
   void set_parent(AbstractCFGNode *Node) { Parent = Node; }
+
   static Expression *calculateExpression(BasicBlock *BB, Instruction *inst, ScalarEvolution *SE, LoopInfo *LI);
 
   std::map<Value *, ExpressionNode *> value_node_map;
@@ -132,7 +161,7 @@ namespace optmig {
 struct ExpressionNode {
 
   friend class Expression;
-
+  friend class AbstractCFG;
 public:
   typedef std::vector<ExpressionNode *>::iterator iterator;
   typedef std::vector<ExpressionNode *>::const_iterator const_iterator;
@@ -149,7 +178,7 @@ public:
 
   std::string getLabel() const;
 
-  bool maps_to(const ExpressionNode &other) const;
+  bool maps_to(const ExpressionNode &other) const ;
 
   bool maps_to(const ExpressionNode *other) const {
     if (nullptr == other)
@@ -168,9 +197,13 @@ public:
 
   InductionDescription getInductionDescription() const { return ival; }
 
-  ExpressionNode(Expression *Parent, Value *V) : Parent(Parent), V(V) {}
+  ExpressionNode(Expression *Parent, Value *V, AbstractCFGNode *Reference = nullptr)
+      : Parent(Parent), V(V), Reference(Reference) {}
 
-  ExpressionNode(Expression *Parent, Value *V, InductionDescription IV) : ExpressionNode(Parent, V) { ival = IV; }
+  ExpressionNode(Expression *Parent, Value *V, InductionDescription IV, AbstractCFGNode *Reference = nullptr)
+      : ExpressionNode(Parent, V, Reference) {
+    ival = IV;
+  }
 
   virtual ~ExpressionNode() {}
 
@@ -182,12 +215,16 @@ public:
     return false;
   }
 
+  AbstractCFGNode* get_reference() const { return Reference; }
+
 private:
   u_int64_t _internal_id = 0;
 
   Value *V;
 
   Expression *Parent;
+
+  AbstractCFGNode *Reference;
 
   InductionDescription ival;
 
@@ -278,81 +315,7 @@ template <> struct JSONGraphTraits<const Expression *> : public DefaultJSONGraph
   JSONGraphTraits() : DefaultJSONGraphTraits() {}
   static u_int64_t getUniqueNodeID(const ExpressionNode &N) { return (u_int64_t) static_cast<const void *>(&N); }
 
-  static std::string getNodeAttributes(const ExpressionNode &N, const Expression &E) {
-    const ExpressionNode *Root = E.getRoot();
-    Value *v = N.getValue();
-
-    Value *rv = Root->getValue();
-
-    std::string str;
-    raw_string_ostream O(str);
-    O << "{ ";
-    {
-      if (Argument *arg = dyn_cast<Argument>(v)) {
-        O << "\"argument\" : ";
-        O << "\"" << arg->getName() << "\"";
-      } else if (Constant *_const = dyn_cast<Constant>(v)) {
-        O << "\"constant\" : ";
-        if (ConstantInt *int_const = dyn_cast<ConstantInt>(_const)) {
-          O << int_const->getValue().getSExtValue();
-        } else if (ConstantFP *fp_const = dyn_cast<ConstantFP>(_const)) {
-          const APFloat &fpval = fp_const->getValueAPF();
-          Type *ty = fp_const->getType();
-          if (ty->isFloatTy()) {
-            O << fpval.convertToFloat();
-          } else if (ty->isDoubleTy()) {
-            O << fpval.convertToDouble();
-          } else {
-            errs() << "Float semantic not supported: " << *ty << "\n";
-            return "";
-          }
-        }
-      } else if (Instruction *inst = dyn_cast<Instruction>(v)) {
-        unsigned opcode = inst->getOpcode();
-        O << "\"opcode\" : "
-          << "[\"" << Instruction::getOpcodeName(opcode) << "\"," << opcode;
-
-        switch (opcode) {
-        case Instruction::ICmp: {
-
-          ICmpInst *cmp = cast<ICmpInst>(inst);
-          O << ", ";
-          O << cmp->getPredicate();
-          break;
-        }
-        case Instruction::FCmp: {
-          FCmpInst *cmp = cast<FCmpInst>(inst);
-          O << ", ";
-          O << cmp->getPredicate();
-          break;
-        }
-        }
-
-        O << "]";
-        // TODO: add reference to phi where it is defined
-        //        if (Instruction *rinst = dyn_cast<Instruction>(rv))
-        //          if (inst->getParent() != rinst->getParent()) {
-        //            O << ", ";
-        //            O << "\"ref\":" << E.getParent()->get_node(inst->getParent());
-        //          }
-      }
-      O << ", ";
-      O << "\"type\" : ";
-      O << "\"" << *v->getType() << "\"";
-
-      if (N.isInductionValue()) {
-        InductionDescription idesc = N.getInductionDescription();
-        const SCEVConstant *init = dyn_cast<SCEVConstant>(idesc.getInit());
-        const SCEVConstant *step = dyn_cast<SCEVConstant>(idesc.getStep());
-        O << ", ";
-        O << "\"i_val\" : "
-          << "[ " << init->getValue()->getSExtValue() << ", " << step->getValue()->getSExtValue() << ",\""
-          << *idesc.getEnd() << "\"]";
-      }
-    }
-    O << "} ";
-    return O.str();
-  }
+  static std::string getNodeAttributes(const ExpressionNode &N, const Expression &E);
 };
 }
 

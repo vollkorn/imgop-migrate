@@ -5,7 +5,6 @@
  *      Author: lukas
  */
 
-
 // Glibc
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,126 +21,173 @@
 
 extern int opterr;
 
-int main(int argc, char**argv)
-{
+void create_filter_kernel(int size, float *kernel, float init, float *scale) {
 
-	opterr = 0;
+  for (int i = 0; i < size * size; ++i) {
+    kernel[i] = init;
+    *scale += init;
+  }
+}
 
-	int index = 0, verbose_output = 0, arg = 0;
+int main(int argc, char **argv) {
 
-	int _size_arr = 0,  _size_filter = 0;
+  opterr = 0;
 
-    u_int8_t ** data_input;
-    u_int8_t ** data_output;
+  int index = 0, verbose_output = 0, arg = 0;
 
-    u_int32_t nrows, ncols, nchannels;
+  int _size_arr = 0, _size_filter = 0;
 
-    int opt;
-    char* filename_in = NULL;
-    char* filename_out = NULL;
+  u_int8_t **data_input;
+  u_int8_t **data_output;
 
-    while ((opt = getopt(argc, argv, "f:v::")) != -1) {
-      switch (opt) {
-      case 'f':
-    	  filename_in = optarg;
+  u_int32_t size_y, size_x, nchannels = 1;
+
+  int opt;
+  char *filename_in = NULL;
+  char *filename_out = NULL;
+  char *operation = NULL;
+  while ((opt = getopt(argc, argv, "f:o:v::")) != -1) {
+    switch (opt) {
+    case 'f':
+      filename_in = optarg;
+      break;
+    case 'o':
+      operation = optarg;
+      break;
+    case 'v':
+      verbose_output = 1;
+      break;
+    default:
+      fprintf(stderr, "Usage: %s -f [file...]\n", argv[0]);
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  if (!filename_in) {
+    for (index = optind; index < argc; index++) {
+
+      switch (arg++) {
+      case 0:
+        _size_arr = atoi(argv[index]);
         break;
-      case 'v':
-    	  verbose_output = 1;
-    	  break;
-      default:
-        fprintf(stderr, "Usage: %s -f [file...]\n", argv[0]);
-        exit(EXIT_FAILURE);
+      case 1:
+        _size_filter = atoi(argv[index]);
+        break;
+      case 2:
+        nchannels = atoi(argv[index]);
+        break;
       }
     }
 
-    if (!filename_in) {
-      for (index = optind; index < argc; index++) {
+    size_y = size_x = _size_arr;
 
-        switch (arg++) {
-        case 0:
-        	_size_arr = atoi(argv[index]);
-          break;
-        case 1:
-          _size_filter = atoi(argv[index]);
-          break;
-        }
-      }
+    filename_in = "dummy";
 
-      nrows = ncols = _size_arr;
+    data_input = create_image_2d_rand(size_y, size_x, nchannels);
+    data_output = create_image_2d(size_y, size_x, nchannels, 0);
 
-      filename_in = "dummy";
+  } else {
 
-      data_input  = create_array_2d(nrows, ncols, 1);
-      data_output = create_array_2d(nrows, ncols, 0);
-
-    }else{
-
-    	if(jpeg_decompress(&data_input, &ncols, &nrows, &nchannels, filename_in)){
-    		fprintf(stderr, "jpeg decompression failed\n");
-    		return 1;
-    	}
-
-        for (index = optind; index < argc; index++) {
-          switch (arg++) {
-          case 0:
-            _size_filter = atoi(argv[index]);
-            break;
-          }
-        }
-
-    	data_output = create_array_2d(nrows, ncols, 0);
-    }
-
-    filename_out = (char *)calloc(sizeof(char), strlen(filename_in) + sizeof(FILE_SUFFIX) + 1);
-    strncpy(filename_out, filename_in, strlen(filename_in));
-    strcat(filename_out, FILE_SUFFIX);
-
-    int i = 0, j = 0;
-
-    float kernel_3_3[] = {0.1, 0.1, 0.1,
-    				  0.1, 0.1, 0.1,
-					  0.1, 0.1, 0.1};
-
-    float kernel_5_5[] = {2.0, 2.0, 2.0, 2.0, 2.0,
-    				  2.0, 2.0, 2.0, 2.0, 2.0,
-					  2.0, 2.0, 2.0, 2.0, 2.0,
-					  2.0, 2.0, 2.0, 2.0, 2.0,
-					  2.0, 2.0, 2.0, 2.0, 2.0};
-
-    float kernel_7_7[] = {2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-    				  2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-					  2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-					  2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-					  2.0, 2.0, 2.0, 2.0, 2.0,  2.0, 2.0,
-					  2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-					  2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0};
-
-
-    if(_size_filter == 3)
-    	convolve_loop_nest((const u_int8_t**)data_input, data_output, &kernel_3_3[0], 3, ncols, nrows);
-    else if(_size_filter == 5)
-    	convolve_loop_nest((const u_int8_t**)data_input, data_output, &kernel_5_5[0], 5, ncols, nrows);
-    else if(_size_filter == 7)
-    	convolve_loop_nest((const u_int8_t**)data_input, data_output, &kernel_7_7[0], 7, ncols, nrows);
-    else{
-      printf("invalid filter size!\n");
-      free_array_2d(nrows, data_input);
-      free_array_2d(nrows, data_output);
+    if (jpeg_decompress(&data_input, &size_x, &size_y, &nchannels, filename_in)) {
+      fprintf(stderr, "Jpeg decompression failed\n");
       return 1;
     }
-    if (verbose_output) {
-      for (j = 0; j < _size_arr; ++j) {
-        for (i = 0; i < _size_arr; ++i) {
-          printf("%d\t", data_output[i][j]);
-        }
-        printf("\n");
+
+    fprintf(stdout, "Jpeg decompressed %dx%dx%d\n", size_x, size_y, nchannels);
+
+    for (index = optind; index < argc; index++) {
+      switch (arg++) {
+      case 0:
+        _size_filter = atoi(argv[index]);
+        break;
       }
     }
 
-    jpeg_compress(data_output, ncols, nrows, 1, filename_out);
+    data_output = create_image_2d(size_y, size_x, nchannels, 0);
+  }
 
-    free_array_2d(nrows, data_input);
-    free_array_2d(nrows, data_output);
+  filename_out = (char *)calloc(sizeof(char), strlen(filename_in) + sizeof(FILE_SUFFIX) + 1);
+  strncpy(filename_out, filename_in, strlen(filename_in));
+  strcat(filename_out, FILE_SUFFIX);
 
-    return 0;
+  float scale;
+  float *kernel;
+  if (!operation) {
+
+    kernel = malloc(_size_filter * _size_filter * sizeof(float));
+
+    float init = 0.1;
+    create_filter_kernel(_size_filter, &kernel[0], init, &scale);
+  } else {
+
+    if (!strncmp(operation, "edge", 4)) {
+      _size_filter = 5;
+      kernel = malloc(_size_filter * _size_filter * sizeof(float));
+      float kernel_[] = {
+    		  -1, -1, -1, -1, -1,
+    		  -1, -1, -1, -1, -1,
+    		  -1, -1, 24, -1, -1,
+    		  -1, -1, -1, -1, -1,
+    		  -1, -1, -1, -1, -1 };
+      memcpy(kernel, kernel_, _size_filter * _size_filter * sizeof(float));
+      scale = 1.0;
+    }
+
+    if (!strncmp(operation, "sharpen", 7)) {
+      _size_filter = 3;
+      kernel = malloc(_size_filter * _size_filter * sizeof(float));
+      float kernel_[] = { -1, -1, -1, -1, 9, -1, -1, -1, -1, };
+      memcpy(kernel, kernel_, _size_filter * _size_filter * sizeof(float));
+      scale = 1.0;
+    }
+
+    if (!strncmp(operation, "motion", 6)) {
+      _size_filter = 9;
+      kernel = malloc(_size_filter * _size_filter * sizeof(float));
+      float kernel_[] = {
+    		    1, 0, 0, 0, 0, 0, 0, 0, 0,
+    		    0, 1, 0, 0, 0, 0, 0, 0, 0,
+    		    0, 0, 1, 0, 0, 0, 0, 0, 0,
+    		    0, 0, 0, 1, 0, 0, 0, 0, 0,
+    		    0, 0, 0, 0, 1, 0, 0, 0, 0,
+    		    0, 0, 0, 0, 0, 1, 0, 0, 0,
+    		    0, 0, 0, 0, 0, 0, 1, 0, 0,
+    		    0, 0, 0, 0, 0, 0, 0, 1, 0,
+    		    0, 0, 0, 0, 0, 0, 0, 0, 1,
+    		};
+
+      memcpy(kernel, kernel_, _size_filter * _size_filter * sizeof(float));
+      scale = 9;
+    }
+  }
+
+  if (_size_filter % 2 == 0) {
+    printf("Invalid filter size, must be odd: %d\n", _size_filter);
+    free_array_2d(size_y, data_input);
+    free_array_2d(size_y, data_output);
+    return 1;
+  }
+
+  //  convolve_loop_nest((const u_int8_t **)data_input, data_output, &kernel[0], _size_filter, ncols, nrows, scale);
+  //  convolve_2d1_noninline_2darr((const u_int8_t **)data_input, data_output, &kernel[0], _size_filter, size_x, size_y,
+  // scale);
+
+  convolve_2d3_inline_2darr((const u_int8_t **)data_input, data_output, &kernel[0], _size_filter, size_x, size_y,
+                            scale);
+
+  if (verbose_output) {
+    for (int i = 0; i < size_y; ++i) {
+      for (int j = 0; j < size_x; ++j) {
+        printf("%d\t", data_output[i][j]);
+      }
+      printf("\n");
+    }
+  }
+
+  jpeg_compress(data_output, size_x, size_y, nchannels, filename_out);
+
+  free_array_2d(size_y, data_input);
+  free_array_2d(size_y, data_output);
+
+  return 0;
 }

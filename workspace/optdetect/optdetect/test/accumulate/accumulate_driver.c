@@ -13,32 +13,6 @@
 
 #include "accumulate.h"
 
-
-void       free_array_2d(size_t nrows, int_type_t** arr)
-{
-    for (int i = 0; i < nrows; i++)
-    {
-        free(arr[i]);
-    }
-    free(arr);
-}
-
-int_type_t** create_array_2d(size_t nrows, size_t ncols, int_type_t init)
-{
-    int_type_t ** foo = (int_type_t **) malloc(sizeof(int_type_t*) * nrows);
-
-    for(int i = 0; i < nrows; i++)
-    {
-        foo[i] = (int_type_t *) malloc(sizeof(int_type_t) * ncols);
-
-        for(int j = 0; j < ncols; j++)
-        {
-            foo[i][j] = init;
-        }
-    }
-    return foo;
-}
-
 int main(int argc, char**argv)
 {
 
@@ -54,8 +28,8 @@ int main(int argc, char**argv)
     nrows = ncols = _size_arr;
 
 
-    int_type_t ** foo = create_array_2d(nrows, ncols, 1);
-    int_type_t ** bar = create_array_2d(nrows, ncols, 1);
+    int_type_t ** foo = create_array_2d_grayscale(nrows, ncols, 1);
+    int_type_t ** bar = create_array_2d_grayscale(nrows, ncols, 1);
 
     accumulate_2d_addr((const int_type_t**)foo, bar, _size_window + 1, _size_window + 1, _size_window);
 

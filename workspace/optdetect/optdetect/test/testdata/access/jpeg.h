@@ -18,11 +18,12 @@
 
 void free_array_2d(size_t nrows, u_int8_t** arr);
 
-u_int8_t** create_array_2d(size_t nrows, size_t ncols, u_int8_t init);
+u_int8_t** create_image_2d_rand(size_t nrows, size_t ncols, size_t channels);
+u_int8_t** create_image_2d(size_t nrows, size_t ncols, size_t channels, u_int8_t init);
 
 void arr_set_value(u_int8_t **arr, size_t nrows, size_t ncols, u_int8_t val);
 
-void arr_copy(u_int8_t **src, u_int8_t **dst, size_t ny, size_t nx);
+void arr_copy(u_int8_t **src, u_int8_t **dst, size_t ny, size_t nx, size_t channels);
 
 int jpeg_compress(u_int8_t** data, u_int32_t nx, u_int32_t ny, u_int32_t nc, const char* filename);
 

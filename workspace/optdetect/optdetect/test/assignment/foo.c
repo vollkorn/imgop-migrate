@@ -6,10 +6,9 @@
  */
 
 
-void foo(float A[10]){
+void foo(float A[10], int n){
 
-
-	for(int i= 0; i < 10; ++i)
+	for(int i= 0; i < n; ++i)
 		A[i] = (i + 5) * 3 * i;
 
 }

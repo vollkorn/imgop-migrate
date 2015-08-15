@@ -15,7 +15,7 @@ using optmig::Pattern;
 using optmig::PatternDB;
 using optmig::MatchResult;
 
-Pattern *Pattern::createFromObj(const json &pattern, ScalarEvolution *SE) {
+Pattern *Pattern::create_from_obj(const json &pattern, ScalarEvolution *SE) {
   Pattern *p = nullptr;
   json hwiface = pattern["hwiface"];
   json hwiface_binding = hwiface["binding"];
@@ -28,13 +28,13 @@ Pattern *Pattern::createFromObj(const json &pattern, ScalarEvolution *SE) {
   SmallVector<Type *, 8> ArgTy;
   std::vector<uint64_t> binding;
 
-  LLVMContext& context = SE->getContext();
+  LLVMContext &context = SE->getContext();
 
   for (auto it = hwiface_binding.begin_elements(); it != hwiface_binding.end_elements(); ++it) {
     uint64_t _id = ((*it)[0]).as_ulong();
     std::string type = ((*it)[1]).as_string();
 
-    ArgTy.push_back(Expression::getTypeFromString(context, type));
+    ArgTy.push_back(Expression::type_from_str(context, type));
     binding.push_back(_id);
   }
 
@@ -75,21 +75,21 @@ bool MatchResult::resolve_binding(SmallVector<Value *, 8> &value_binding) {
         cval = cnode->getValue();
       }
 
-      if (cval){
+      if (cval) {
         value_binding.push_back(cval);
         break;
       }
     }
   }
 
-  if(binding.size() != value_binding.size()){
-	  errs() << "Arguments not bound: " <<  (binding.size() - value_binding.size()) << "\n";
-	  return false;
+  if (binding.size() != value_binding.size()) {
+    errs() << "Arguments not bound: " << (binding.size() - value_binding.size()) << "\n";
+    return false;
   }
   return true;
 }
 
-bool MatchResult::try_offload(RegionInfo *RI) {
+bool MatchResult::try_offload() {
 
   BasicBlock *Entry, *Exit;
 
@@ -139,8 +139,8 @@ bool MatchResult::try_offload(RegionInfo *RI) {
   }
   // Create prototype of external defined hw accelerator function
   IRBuilder<> builder(BB);
-  Function* F = P->get_function();
-  Function* proto = Function::Create(F->getFunctionType(), Function::ExternalLinkage, F->getName(), M);
+  Function *F = P->get_function();
+  Function *proto = Function::Create(F->getFunctionType(), Function::ExternalLinkage, F->getName(), M);
   CallInst *hwcall = builder.CreateCall(proto, binding);
   builder.CreateCondBr(hwcall, Entry, Exit);
 
@@ -155,8 +155,8 @@ bool PatternDB::CFGNarrow(const AbstractCFGNode *n_H, const AbstractCFGNode *n_G
   if (!expr_of_H.empty() && expr_of_G.empty())
     return false;
 
-  // TODO: do the same for float compare
-  if (n_H->get_expression_by(Instruction::ICmp) && !n_G->get_expression_by(Instruction::ICmp))
+  if ((n_H->get_expression_by(Instruction::ICmp) && !n_G->get_expression_by(Instruction::ICmp)) ||
+      (n_H->get_expression_by(Instruction::FCmp) && !n_G->get_expression_by(Instruction::FCmp)))
     return false;
 
   // Check labels
@@ -182,7 +182,7 @@ bool PatternDB::CFGNarrow(const AbstractCFGNode *n_H, const AbstractCFGNode *n_G
   return true;
 }
 
-std::vector<MatchResult> PatternDB::find_matchings(const AbstractCFG *G) {
+std::vector<MatchResult> PatternDB::find_matchings(const AbstractCFG *G, bool show_graphs) {
 
   std::vector<MatchResult> matchings;
 
@@ -193,6 +193,11 @@ std::vector<MatchResult> PatternDB::find_matchings(const AbstractCFG *G) {
 
     const AbstractCFG *H = p->getCFG();
 
+    // Forward to next pattern if number of nodes in H is greater
+    // than number of node in G -> no isomorphism possible
+    if (std::distance(G->nodes_begin(), G->nodes_end()) < std::distance(H->nodes_begin(), H->nodes_end()))
+      continue;
+
     if (!GraphMatcher<AbstractCFG>::find_isomorphisms(G, H, assignments, &PatternDB::CFGNarrow))
       continue;
 
@@ -201,9 +206,8 @@ std::vector<MatchResult> PatternDB::find_matchings(const AbstractCFG *G) {
 
       GraphMatcher<AbstractCFG>::AssignmentT *A = *it;
       std::map<Expression *, GraphMatcher<Expression>::AssignmentT> ExpressionMappings;
-
-      GraphMatcher<AbstractCFG>::print_assignment(dbgs(), A);
-
+      if (show_graphs)
+        GraphMatcher<AbstractCFG>::show_matching_graph(G, H, A);
       bool assignment_valid = true;
       // For each assignment in the CFG try to match the expressions
       // of each block of the pattern to a block of the candidate
@@ -235,8 +239,8 @@ std::vector<MatchResult> PatternDB::find_matchings(const AbstractCFG *G) {
         delete A;
       } else {
         ++it;
-        GraphMatcher<AbstractCFG>::show_matching_graph(G, H, A);
 
+        GraphMatcher<AbstractCFG>::print_assignment(dbgs(), A);
         matchings.push_back({ p, A, ExpressionMappings });
       }
     }
@@ -256,7 +260,7 @@ PatternDB &PatternDB::load(const std::string &filename, ScalarEvolution *SE) {
 
     json pattern = (*it);
 
-    Pattern *p = Pattern::createFromObj(pattern, SE);
+    Pattern *p = Pattern::create_from_obj(pattern, SE);
 
     if (p)
       instance.db.push_back(p);

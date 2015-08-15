@@ -10,9 +10,12 @@
 
 
 #include <sys/types.h>
+#include "interpolation.h"
 
 void matrix_multiply();
 
-void transform(u_int8_t **data_in, u_int8_t **data_out, int nx, int ny, int l, int m, float M[l][m] );
+void transform(u_int8_t **data_in, u_int8_t **data_out, int nx, int ny, float M[3][3] );
+void transform_(u_int8_t **data_in, u_int8_t **data_out, float** positions, int nx, int ny, float M[3][3] );
+
 
 #endif /* OPTDETECT_TEST_AFFINE_TRANSFORMATIONS_H_ */

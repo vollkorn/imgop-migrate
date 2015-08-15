@@ -40,8 +40,8 @@ private:
   std::string name;
 
 public:
-  static Pattern *createFromFile(const std::string &filename);
-  static Pattern *createFromObj(const json &pattern, ScalarEvolution *SE);
+  static Pattern *create_from_file(const std::string &filename);
+  static Pattern *create_from_obj(const json &pattern, ScalarEvolution *SE);
 
   const AbstractCFG *getCFG() { return H; }
 
@@ -77,7 +77,7 @@ public:
       : P(P), CFGMapping(CFGMapping), ExpressionMapping(ExpressionMapping) {}
   virtual ~MatchResult() {}
 
-  bool try_offload(RegionInfo* RI);
+  bool try_offload();
 
 
 private:
@@ -95,7 +95,7 @@ class PatternDB {
 public:
   static PatternDB &load(const std::string &filename, ScalarEvolution *SE);
 
-  std::vector<MatchResult> find_matchings(const AbstractCFG *G);
+  std::vector<MatchResult> find_matchings(const AbstractCFG *G, bool show_graphs);
 
   static bool CFGNarrow(const AbstractCFGNode * n_H, const AbstractCFGNode * n_G);
 

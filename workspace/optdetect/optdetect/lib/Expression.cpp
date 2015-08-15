@@ -5,17 +5,23 @@
  *      Author: lukas
  */
 
-#include "Expression.h"
+#include "llvm/ADT/StringExtras.h"
 
 #include "llvm/IR/Module.h"
-
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Support/Regex.h"
+#include "llvm/ADT/StringExtras.h"
 
+#include "Expression.h"
 #include "AbstractCFG.h"
+
+#include <string>
 
 using namespace llvm;
 using optmig::Expression;
 using optmig::ExpressionNode;
+using optmig::JSONGraphTraits;
 
 void ExpressionNode::print(raw_ostream &O, bool simple) const {
 
@@ -49,8 +55,27 @@ bool ExpressionNode::maps_to(const ExpressionNode &other) const {
 
   if (Instruction *inst_1 = dyn_cast<Instruction>(v1))
     if (Instruction *inst_2 = dyn_cast<Instruction>(v2))
-      if (inst_1->getOpcode() == inst_2->getOpcode())
+      if (inst_1->getOpcode() == inst_2->getOpcode()) {
+
+        // In case of phi nodes, check if they have equal induction
+        // structure
+        if (isa<PHINode>(inst_1) && isa<PHINode>(inst_2)) {
+          InductionDescription::MapResult mapresult = ival.map_to(other.ival);
+
+          switch (mapresult) {
+          case InductionDescription::MapResult::IDesc_Map_Ok:
+            return true;
+          case InductionDescription::MapResult::IDesc_Map_Invalid:
+            return false;
+          case InductionDescription::MapResult::IDesc_Map_Resolve_Exit: {
+
+            // TODO: take action here
+            return true;
+          }
+          }
+        }
         return true;
+      }
 
   if (ConstantInt *int_const1 = dyn_cast<ConstantInt>(v1))
     if (ConstantInt *int_const2 = dyn_cast<ConstantInt>(v2))
@@ -111,7 +136,8 @@ ExpressionNode *Expression::getNodeFor(Value *v) {
   return nullptr;
 }
 
-ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json &curr, json &G, ScalarEvolution *SE) {
+ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json &curr, json &G, ScalarEvolution *SE,
+                                            std::map<u_int64_t, ExpressionNode *> &lazy_references) {
 
   static std::map<unsigned, ExpressionNode *> id_node_map;
 
@@ -141,20 +167,23 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
   }
 
   for (json obj : successors)
-    if (ExpressionNode *op = deserialize_rec(BB, T, obj, G, SE))
+    if (ExpressionNode *op = deserialize_rec(BB, T, obj, G, SE, lazy_references))
       operands.push_back(op);
 
   json attributes = curr["attributes"];
 
   Value *v = nullptr;
 
+  InductionDescription idesc;
+
   if (!attributes.is_empty()) {
 
     IRBuilder<> builder(BB);
     Type *ty = nullptr;
-    if (attributes.has_member("type"))
-      ty = getTypeFromString(BB->getContext(), attributes["type"].as_string());
-
+    if (attributes.has_member("type")) {
+      std::string typestr = attributes["type"].as_string();
+      ty = type_from_str(BB->getContext(), typestr);
+    }
     if (!ty) {
       errs() << "Could not determine type of expression!\n";
       return nullptr;
@@ -182,6 +211,10 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
             v = builder.CreateStore(operands[0]->getValue(), operands[1]->getValue());
           break;
         }
+        case Instruction::Alloca: {
+          v = builder.CreateAlloca(ty);
+          break;
+        }
         case Instruction::Load: {
           if (operands.size() == 1)
             v = builder.CreateLoad(operands[0]->getValue());
@@ -193,18 +226,26 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
 
             const SCEV *SEStart = SE->getConstant(ty, ival[0].as_long(), true);
             const SCEVConstant *SEStep = dyn_cast<SCEVConstant>(SE->getConstant(ty, ival[1].as_long(), true));
+            const SCEV *SEExit = nullptr;
 
-            std::string e = ival[2].as_string();
-            std::replace(e.begin(), e.end(), '%', ' ');
-            size_t pos = e.find_first_not_of(" ");
-            if (std::string::npos != pos)
-              e = e.substr(pos);
+            if (ival[2].is_string()) {
 
-            ValueSymbolTable &SymTable = BB->getParent()->getValueSymbolTable();
-            Value *v = SymTable.lookup(e);
-            const SCEV *SEExit = SE->getUnknown(v);
+              // normalize exit expression (remove %, trim, ...)
+              std::string e = ival[2].as_string();
+              std::replace(e.begin(), e.end(), '%', ' ');
+              size_t pos = e.find_first_not_of(" \t");
+              if (std::string::npos != pos)
+                e = e.substr(pos);
 
-            InductionDescription idesc(SEStart, SEStep, SEExit);
+              ValueSymbolTable &SymTable = BB->getParent()->getValueSymbolTable();
+              Value *v = SymTable.lookup(e);
+              SEExit = SE->getUnknown(v);
+            } else if (ival[2].is_numeric()) {
+
+              SEExit = SE->getConstant(ty, ival[2].as_long(), true);
+            }
+
+            idesc = InductionDescription(SEStart, SEStep, SEExit);
           }
           v = builder.CreatePHI(ty, 0);
           break;
@@ -214,6 +255,8 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
           SmallVector<Value *, 8> idxList;
           std::for_each(operands.begin() + 1, operands.end(),
                         [&idxList](ExpressionNode *node) { idxList.push_back(node->getValue()); });
+          Value *ptr = operands[0]->getValue();
+
           v = builder.CreateGEP(operands[0]->getValue(), idxList);
           break;
         }
@@ -231,16 +274,25 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
           }
           break;
         }
+        case Instruction::Select: {
+          if (operands.size() == 3) {
+            v = builder.CreateSelect(operands[0]->getValue(), operands[1]->getValue(), operands[2]->getValue());
+          }
+          break;
+        }
+        default:
+          errs() << "Don't know how to deseralize instruction [" << Instruction::getOpcodeName(code) << "," << code
+                 << "]\n";
         }
       }
     }
 
     if (attributes.has_member("argument")) {
       ValueSymbolTable &SymTable = BB->getParent()->getValueSymbolTable();
-      std::string argname  = attributes["argument"].as_string();
+      std::string argname = attributes["argument"].as_string();
       v = SymTable.lookup(argname);
-
-      v = (v == nullptr) ? new Argument(ty, argname) : v;
+      if (!v)
+        errs() << "Unknown argument\n";
     }
 
     if (attributes.has_member("constant")) {
@@ -255,7 +307,17 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
       return nullptr;
     }
   }
-  ExpressionNode *N = new ExpressionNode(T, v);
+  ExpressionNode *N;
+  if (idesc.valid())
+    N = new ExpressionNode(T, v, idesc);
+  else
+    N = new ExpressionNode(T, v);
+
+  if (!N)
+    return nullptr;
+
+  if (attributes.has_member("ref"))
+    lazy_references.insert(std::make_pair(attributes["ref"].as_ulong(), N));
 
   N->_internal_id = _id;
 
@@ -267,9 +329,102 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
   return N;
 }
 
-Type *Expression::getTypeFromString(LLVMContext &context, const std::string &str) {
+static bool parse_pointer_type(LLVMContext &context, Type *&base, Type *&Result, std::string &str) {
+
+  if (str.empty() && Result)
+    return true;
+
+  std::string token = str.substr(0, 1);
+  str = str.substr(1);
+
+  Type *ty;
+  if (token[0] == '*') {
+    parse_pointer_type(context, base, ty, str);
+  }
+
+  return false;
+}
+
+// Consume the specified token
+// interted logic!
+static bool parse_token(char e, std::string &str) {
+
+  if (str.empty())
+    return true;
+  std::string token = str.substr(0, 1);
+  str = str.substr(1);
+
+  if (token[0] == e)
+    return false;
+
+  return true;
+}
+
+static bool parse_arraytype(LLVMContext &context, Type *&Result, std::string &str) {
+
+  std::string token = str.substr(0, 1);
+  str = str.substr(1);
+
+  std::string number_str;
+  // Consume number
+  if (isdigit(token[0])) {
+
+    number_str = token[0];
+    while (!str.empty() && isdigit(str[0])) {
+      token = str.substr(0, 1);
+      str = str.substr(1);
+      number_str += token[0];
+    }
+
+  } else {
+    errs() << "Expected number, got " << token << "\n";
+    return false;
+  }
+
+  Regex regex_digits("[0-9]+");
+  SmallVector<StringRef, 8> regexmatch;
+
+  uint64_t Size;
+  // Lex (0-9)+
+  if (regex_digits.match(number_str, &regexmatch))
+    Size = std::stoi(regexmatch[0]);
+  else
+    errs() << "Expected a number, got" << token << "\n";
+  // Consume potential whitespaces
+  while (isspace(str[0]))
+    str = str.substr(1);
+
+  // Consume 'x'
+  if (parse_token('x', str)) {
+    errs() << "Unexpected end of array type, 'x' expected.\n";
+    return false;
+  }
+
+  while (isspace(str[0]))
+    str = str.substr(1);
+
+  // Consume ... x TYPE, tokens will be consumed from remaining string
+  Type *ty = Expression::type_from_str(context, str);
+
+  if (parse_token(']', str)) {
+    errs() << "Unexpected end of array type, ']' expected.\n";
+    return false;
+  }
+  Result = ArrayType::get(ty, Size);
+  return true;
+}
+
+// Returns an immutable type object from string
+// i8...i64, i8*...i64*, i8**...i32**
+// float, double
+// array types: [n x (int|float|double)]
+Type *Expression::type_from_str(LLVMContext &context, std::string &str) {
+
+  Type *ty;
+
   if (str.empty())
     return nullptr;
+
   auto _str = [](Type * type)->std::string {
     std::string type_str;
     raw_string_ostream rso(type_str);
@@ -277,23 +432,61 @@ Type *Expression::getTypeFromString(LLVMContext &context, const std::string &str
     return rso.str();
   };
 
-  LLVMContext &c = context;
-  static std::map<std::string, Type *> str_type_map = { { _str(Type::getFloatTy(c)), Type::getFloatTy(c) },
-                                                        { _str(Type::getFloatPtrTy(c)), Type::getFloatPtrTy(c) },
-                                                        { _str(Type::getVoidTy(c)), Type::getVoidTy(c) },
-                                                        { _str(Type::getDoubleTy(c)), Type::getDoubleTy(c) },
-                                                        { _str(Type::getInt1Ty(c)), Type::getInt1Ty(c) },
-                                                        { _str(Type::getInt8Ty(c)), Type::getInt8Ty(c) },
-                                                        { _str(Type::getInt16Ty(c)), Type::getInt16Ty(c) },
-                                                        { _str(Type::getInt32Ty(c)), Type::getInt32Ty(c) },
-                                                        { _str(Type::getInt64Ty(c)), Type::getInt64Ty(c) } };
+  static std::map<std::string, Type *> str_type_map = {
+    { _str(Type::getFloatTy(context)), Type::getFloatTy(context) },
+    { _str(Type::getFloatPtrTy(context)), Type::getFloatPtrTy(context) },
+    { _str(Type::getVoidTy(context)), Type::getVoidTy(context) },
+    { _str(Type::getDoubleTy(context)), Type::getDoubleTy(context) },
+    { _str(Type::getInt1Ty(context)), Type::getInt1Ty(context) },
+    { _str(Type::getInt8Ty(context)), Type::getInt8Ty(context) },
+    { _str(Type::getInt16Ty(context)), Type::getInt16Ty(context) },
+    { _str(Type::getInt32Ty(context)), Type::getInt32Ty(context) },
+    { _str(Type::getInt64Ty(context)), Type::getInt64Ty(context) }
+  };
+  // consume primitive type
 
-  if (str_type_map.find(str) != str_type_map.end())
-    return str_type_map[str];
-  return nullptr;
+  char token = (str.substr(0, 1))[0];
+  str = str.substr(1);
+
+  switch (token) {
+  case 'i':
+  case 'v':
+  case 'f':
+  case 'd': { // match iX, float, double, void
+
+    std::string typestr;
+    typestr += token;
+    while (!str.empty() && isalnum(str[0])) {
+      typestr += str.substr(0, 1);
+      str = str.substr(1);
+    }
+    if (!typestr.empty() && str_type_map.find(typestr) != str_type_map.end())
+      ty = str_type_map[typestr];
+
+    break;
+  }
+  case '[': {
+    if (!parse_arraytype(context, ty, str))
+      return nullptr;
+
+    break;
+  }
+  default:
+    errs() << "Unexpected " << token << "! Expected one of '[', 'int', 'float', 'double'.\n";
+    return nullptr;
+  }
+
+  // parse suffix
+  while (!str.empty() && str[0] == '*') {
+    str = str.substr(1);
+    ty = PointerType::getUnqual(ty);
+  }
+
+  return ty;
 }
 
-Expression *Expression::deserialize(BasicBlock *BB, json &obj, ScalarEvolution *SE) {
+Expression *Expression::deserialize(BasicBlock *BB, json &obj, ScalarEvolution *SE,
+                                    std::map<u_int64_t, ExpressionNode *> &lazyReferences) {
   Expression *T = new Expression(true);
 
   json graph = obj["graph"];
@@ -301,7 +494,29 @@ Expression *Expression::deserialize(BasicBlock *BB, json &obj, ScalarEvolution *
   // iterate nodes
   json nodes = graph[0]["nodes"];
 
-  ExpressionNode *root = deserialize_rec(BB, T, nodes[0], graph, SE);
+  for (auto it = nodes.begin_elements(), end = nodes.end_elements(); it != end; ++it) {
+    json attributes = (*it)["attributes"];
+
+    Value *v = nullptr;
+
+    if (!attributes.is_empty()) {
+
+      Type *ty = nullptr;
+      if (attributes.has_member("type")) {
+        std::string typestr = attributes["type"].as_string();
+        ty = type_from_str(BB->getContext(), typestr);
+      }
+      if (attributes.has_member("argument")) {
+        ValueSymbolTable &SymTable = BB->getParent()->getValueSymbolTable();
+        std::string argname = attributes["argument"].as_string();
+        v = SymTable.lookup(argname);
+
+        v = (v == nullptr) ? new Argument(ty, argname, BB->getParent()) : v;
+      }
+    }
+  }
+
+  ExpressionNode *root = deserialize_rec(BB, T, nodes[0], graph, SE, lazyReferences);
   T->setRoot(root);
   return T;
 }
@@ -314,13 +529,14 @@ Expression *Expression::calculateBranchExpression(BasicBlock *BB, ScalarEvolutio
     if (branch->getNumSuccessors() < 2)
       return nullptr;
 
-    CmpInst *cmp = dyn_cast<CmpInst>(branch->getOperand(0)); // get comparision
+    CmpInst *cmp = dyn_cast<CmpInst>(branch->getOperand(0)); // get comparison
 
     return calculateExpression(BB, cmp, SE, LI);
 
-  } else {
-    errs() << "Cannot compute branch expression from non branch instrucion" << *term << "\n";
   }
+//  else {
+//    dbgs() << "Cannot compute branch expression from non branch instrucion" << *term << "\n";
+//  }
   return nullptr;
 }
 
@@ -476,7 +692,7 @@ Expression *Expression::calculateExpression(BasicBlock *BB, Instruction *inst, S
         node = new ExpressionNode(T, val);
       }
 
-      if (!node->isInductionValue())
+      if (!node->isInductionValue())	// do not consider already visited nodes
         for (Use &U : instr->operands()) {
           Value *operand = U.get();
           stack.push_back(std::make_pair(operand, node)); // visit each operand
@@ -501,4 +717,107 @@ Expression *Expression::calculateExpression(BasicBlock *BB, Instruction *inst, S
   }
 
   return T;
+}
+
+std::string JSONGraphTraits<const Expression *>::getNodeAttributes(const ExpressionNode &N, const Expression &E) {
+  Value *v = N.getValue();
+
+  const ExpressionNode *Root = E.getRoot();
+  Value *root_inst = Root->getValue();
+
+  std::string str;
+  raw_string_ostream O(str);
+  O << "{ ";
+  {
+    if (Argument *arg = dyn_cast<Argument>(v)) {
+      O << "\"argument\" : ";
+      O << "\"" << arg->getName() << "\"";
+
+      O << ", ";
+      O << "\"type\" : ";
+      O << "\"" << *v->getType() << "\"";
+
+    } else if (Constant *_const = dyn_cast<Constant>(v)) {
+
+      O << "\"constant\" : ";
+      if (ConstantInt *int_const = dyn_cast<ConstantInt>(_const)) {
+        O << int_const->getValue().getSExtValue();
+      } else if (ConstantFP *fp_const = dyn_cast<ConstantFP>(_const)) {
+        const APFloat &fpval = fp_const->getValueAPF();
+        Type *ty = fp_const->getType();
+        if (ty->isFloatTy()) {
+          O << fpval.convertToFloat();
+        } else if (ty->isDoubleTy()) {
+          O << fpval.convertToDouble();
+        } else {
+          errs() << "Float semantic not supported: " << *ty << "\n";
+          return "";
+        }
+      }
+
+      O << ", ";
+      O << "\"type\" : ";
+      O << "\"" << *v->getType() << "\"";
+
+    } else if (Instruction *inst = dyn_cast<Instruction>(v)) {
+      unsigned opcode = inst->getOpcode();
+      O << "\"opcode\" : "
+        << "[\"" << Instruction::getOpcodeName(opcode) << "\"," << opcode;
+
+      switch (opcode) {
+      case Instruction::ICmp: {
+
+        ICmpInst *cmp = cast<ICmpInst>(inst);
+        O << ", ";
+        O << cmp->getPredicate();
+        break;
+      }
+      case Instruction::FCmp: {
+        FCmpInst *cmp = cast<FCmpInst>(inst);
+        O << ", ";
+        O << cmp->getPredicate();
+        break;
+      }
+      }
+
+      O << "]";
+      // Add reference for instructions that were defined in another
+      // BB. These are usually phi nodes.
+      // In some cases instructions were moved by licm, thus deriving
+      // a reference too
+      if (Instruction *user = dyn_cast<Instruction>(root_inst))
+        if (inst->getParent() != user->getParent()) {
+          O << ", ";
+          O << "\"ref\":" << E.get_parent()->get_parent()->get_node(inst->getParent())->get_uid();
+        }
+
+      O << ", ";
+      O << "\"type\" : ";
+      if (AllocaInst *alloca = dyn_cast<AllocaInst>(inst)) {
+        O << "\"" << *alloca->getAllocatedType() << "\"";
+      } else {
+        O << "\"" << *v->getType() << "\"";
+      }
+    }
+
+    if (N.isInductionValue()) {
+      InductionDescription idesc = N.getInductionDescription();
+      const SCEVConstant *init = dyn_cast<SCEVConstant>(idesc.getInit());
+      const SCEVConstant *step = dyn_cast<SCEVConstant>(idesc.getStep());
+      const SCEV *exit = idesc.getExit();
+
+      O << ", ";
+      O << "\"i_val\" : "
+        << "[ " << init->getValue()->getSExtValue() << ", " << step->getValue()->getSExtValue() << ",";
+      if (exit->getSCEVType() == SCEVTypes::scConstant) { // constant exit value
+        const SCEVConstant *exitval = dyn_cast<SCEVConstant>(exit);
+        O << exitval->getValue()->getSExtValue(); // exit value depends on argument
+      } else if (exit->getSCEVType() == SCEVTypes::scUnknown) {
+        O << "\"" << *exit << "\"";
+      }
+      O << "]";
+    }
+  }
+  O << "} ";
+  return O.str();
 }

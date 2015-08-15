@@ -17,7 +17,8 @@
 
 #define FILE_SUFFIX "_transformed.jpg\0"
 
-void do_it(u_int8_t** in, u_int8_t** out, int nx, int ny);
+void do_it(u_int8_t** in, u_int8_t** out, int nx, int ny, int channels);
+void do_it_interpolate(u_int8_t** in, u_int8_t** out, int nx, int ny, int channels);
 
 int main(int argc, char**argv){
 
@@ -30,7 +31,7 @@ int main(int argc, char**argv){
     u_int8_t ** data_input;
     u_int8_t ** data_output;
 
-    u_int32_t nrows, ncols, nchannels;
+    u_int32_t nrows, ncols, nchannels = 1;
 
     int opt;
     char* filename_in = NULL;
@@ -64,8 +65,8 @@ int main(int argc, char**argv){
 
       filename_in = "dummy";
 
-      data_input  = create_array_2d(nrows, ncols, 1);
-      data_output = create_array_2d(nrows, ncols, 0);
+      data_input  = create_image_2d(nrows, ncols, nchannels, 1);
+      data_output = create_image_2d(nrows, ncols, nchannels, 0);
 
     }else{
 
@@ -73,7 +74,7 @@ int main(int argc, char**argv){
     		fprintf(stderr, "jpeg decompression failed\n");
     		return 1;
     	}
-    	data_output = create_array_2d(nrows, ncols, 0);
+    	data_output = create_image_2d(nrows, ncols, nchannels, 0);
     }
 
     filename_out = (char *)calloc(sizeof(char), strlen(filename_in) + sizeof(FILE_SUFFIX) + 1);
@@ -82,7 +83,7 @@ int main(int argc, char**argv){
 
 // ------------------------------------------------------------------------------------
 
-    do_it(data_input, data_output, ncols, nrows);
+    do_it_interpolate(data_input, data_output, ncols, nrows, nchannels);
 
 // ------------------------------------------------------------------------------------
     if (verbose_output) {
@@ -103,7 +104,7 @@ int main(int argc, char**argv){
 
 
 
-void do_it(u_int8_t** in, u_int8_t** out, int nx, int ny){
+void do_it(u_int8_t** in, u_int8_t** out, int nx, int ny, int channels){
 
 	int dx = 0, dy = 0;
 
@@ -118,7 +119,7 @@ void do_it(u_int8_t** in, u_int8_t** out, int nx, int ny){
 	shy = 0.5;
 
 	// translate
-	float T[3][3] = {{1, 0, dy},{0, 1, dy},{0, 0, 1}};
+	float T[3][3] = {{1, 0, dx},{0, 1, dy},{0, 0, 1}};
 
 	// scale
 	float S[3][3] = {{sx, 0, 0},{0, sy, 0},{0, 0, 1}};
@@ -127,13 +128,27 @@ void do_it(u_int8_t** in, u_int8_t** out, int nx, int ny){
 	float SH[3][3] = {{1, shx, 0},{shy, 1, 0},{0, 0, 1}};
 
 	arr_set_value(out, ny, nx, 0);
-	transform(in, out, nx, ny, 3, 3, T);
+	transform(in, out, nx, ny, T);
 
 	arr_set_value(in, ny, nx, 0);
-	transform(out, in, nx, ny, 3, 3, S);
+	transform(out, in, nx, ny, S);
 
 	arr_set_value(out, ny, nx, 0);
-	transform(in, out, nx, ny, 3, 3, SH);
+	transform(in, out, nx, ny, SH);
+}
 
-//	arr_copy(in, out, ny, nx);
+void do_it_interpolate(u_int8_t** in, u_int8_t** out, int nx, int ny, int channels){
+	float sx = 0, sy = 0;
+	sx = sy = 1.5;
+	// scale
+	float S[3][3] = {{sx, 0, 0},{0, sy, 0},{0, 0, 1}};
+	float** positions = (float**) create_image_2d(ny, nx*2, 4, 0);
+
+
+	transform_(in, out, positions, nx, ny, S);
+	arr_set_value(out, ny, nx, 0);
+	bilinear_interpolate(in, out, positions, ny, ny, channels);
+
+//	arr_copy(in, out, ny, nx, channels);
+
 }

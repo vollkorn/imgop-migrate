@@ -89,9 +89,11 @@ const AbstractCFG *AbstractCFG::_deserialize(Function *F, const json &Pattern, S
   AbstractCFG *G = new AbstractCFG(F);
 
   json graph = Pattern["graph"];
-
-  // iterate nodes
   json nodes = graph[0]["nodes"];
+  json edges = graph[1]["edges"];
+
+  std::map<u_int64_t, ExpressionNode*> lazyReference;
+
   for (auto it = nodes.begin_elements(); it != nodes.end_elements(); ++it) {
     unsigned _id = (*it)["_id"].as_uint();
 
@@ -113,7 +115,7 @@ const AbstractCFG *AbstractCFG::_deserialize(Function *F, const json &Pattern, S
       if (attributes.has_member("expressions")) {
         json e = attributes["expressions"];
         for (auto eit = e.begin_elements(), eend = e.end_elements(); eit != eend; ++eit) {
-          Expression* expression = Expression::deserialize(BB, *eit, SE);
+          Expression* expression = Expression::deserialize(BB, *eit, SE, lazyReference);
           if (expression != nullptr)
             expressions.push_back(expression);
         }
@@ -124,14 +126,18 @@ const AbstractCFG *AbstractCFG::_deserialize(Function *F, const json &Pattern, S
     if (N) {
       N->add_expression(expressions);
       id_node_map.insert(std::make_pair(_id, N));
-
       G->add_node(N);
     }
   }
 
-  // iterate edges
-  json edges = graph[1]["edges"];
+  for(auto it = lazyReference.begin(), end = lazyReference.end(); it != end; ++it){
 
+	  u_int64_t id = (*it).first;
+	  ExpressionNode* n = (*it).second;
+
+	  n->Reference = id_node_map[id];
+
+  }
   for (auto it = edges.begin_elements(); it != edges.end_elements(); ++it) {
 
     unsigned src_id = (*it)["src"].as_uint();

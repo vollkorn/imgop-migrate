@@ -58,7 +58,12 @@ public:
   AbstractCFGNode(AbstractCFGNode::Label label, BasicBlock *BB = nullptr) : BB(BB) { this->Labels.push_back(label); }
   AbstractCFGNode(ArrayRef<AbstractCFGNode::Label> labels, BasicBlock *BB = nullptr) : Labels(labels), BB(BB) {}
 
-  virtual ~AbstractCFGNode() { /*TODO: delete expressions */
+  virtual ~AbstractCFGNode() {
+    for (int i = 0; i < Expressions.size(); ++i) {
+      Expression *E = Expressions.back();
+      Expressions.pop_back();
+      delete E;
+    }
   }
 
   void print(raw_ostream &O) const;
@@ -96,6 +101,8 @@ public:
     return *it;
   }
 
+  AbstractCFG *get_parent() { return Parent; }
+
   void add_expression(std::vector<Expression *> &Expressions) {
 
     for (Expression *E : Expressions)
@@ -114,6 +121,8 @@ private:
 
   BasicBlock *BB;
 
+  AbstractCFG *Parent = nullptr;
+
   std::vector<AbstractCFGNode::Label> Labels;
 
   std::vector<AbstractCFGNode *> Successors;
@@ -122,6 +131,8 @@ private:
                                                 "loop_inc", "loop_exit", "loop_body",   "unknown" };
 
   void add_child(AbstractCFGNode *node) { Successors.push_back(node); }
+
+  void set_parent(AbstractCFG *Parent) { this->Parent = Parent; }
 };
 }
 
@@ -150,10 +161,10 @@ private:
   DenseMap<BasicBlock *, AbstractCFGNode *> NodeBBmap;
 
   void add_node(AbstractCFGNode *node) {
-
+    node->set_parent(this);
     Nodes.push_back(node);
-
-    NodeBBmap.insert(std::make_pair(node->BB, node));
+    if (BasicBlock *BB = node->getBasicBlock())
+      NodeBBmap.insert(std::make_pair(BB, node));
   }
 
   // Traverse CFG in DFS order and create a simplified version
