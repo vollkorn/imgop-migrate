@@ -32,13 +32,20 @@ u_int8_t **create_image_2d(size_t size_y, size_t size_x, size_t channels, u_int8
 u_int8_t **create_image_2d_rand(size_t size_y, size_t size_x, size_t channels) {
   u_int8_t **foo = (u_int8_t **)malloc(sizeof(u_int8_t *) * size_y);
 
+  u_int8_t rgb[channels];
   for (int i = 0; i < size_y; i++) {
     foo[i] = (u_int8_t *)malloc(sizeof(u_int8_t) * size_x * channels);
 
     for (int j = 0; j < size_x; j++) {
 
+      if (i % 64 == 0 && j % 64 == 0) {
+        for (int k = 0; k < channels; k++) {
+          rgb[k] = random() % 255;
+        }
+      }
+
       for (int k = 0; k < channels; k++) {
-        foo[i][j * channels + k] = random() % 255;
+        foo[i][j * channels + k] = rgb[k];
       }
     }
   }
@@ -148,7 +155,7 @@ int jpeg_compress(u_int8_t **data, u_int32_t nx, u_int32_t ny, u_int32_t nc, con
 
   jpeg_set_defaults(&cinfo);
   /*set the quality [0..100]  */
-  jpeg_set_quality(&cinfo, 75, true);
+  jpeg_set_quality(&cinfo, 90, true);
   jpeg_start_compress(&cinfo, true);
 
   JSAMPROW row_pointer; /* pointer to a single row */

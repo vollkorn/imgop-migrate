@@ -38,7 +38,7 @@ void matrix_multiply(int l, int m, int n, float A[l][m], float B[m][n], float C[
   float T[3][1];
   float A[3][1];
   for (j = 0; j < ny; ++j)     // y dimension iteration
-    for (i = 0; i < nx; ++i) { // x dimension iteration
+    for (i = 0; i < nx * 3; ++i) { // x dimension iteration
 
       A[0][0] = i;
       A[1][0] = j;
@@ -59,7 +59,8 @@ void matrix_multiply(int l, int m, int n, float A[l][m], float B[m][n], float C[
       if (y_ < 0)
         y_ = 0;
 
-      data_out[(int)y_][(int)x_] = data_in[j][i];
+      for(int k = 0; k < 3; ++k)
+    	  data_out[(int)y_][(int)x_*3 + k] = data_in[j][i * 3 + k];
     }
 }
 
