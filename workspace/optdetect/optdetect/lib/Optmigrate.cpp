@@ -59,10 +59,12 @@ using namespace optmig;
 
 #define DEBUG_TYPE "optmigrate"
 
-static cl::opt<bool> show_graphs("show-graphs", cl::init(true), cl::Hidden, cl::desc("Show all graphs"));
+static cl::opt<bool> show_graphs("show-graphs", cl::init(false), cl::Hidden, cl::desc("Show all graphs"));
 
 static cl::opt<bool> create_pattern("serialize-pattern", cl::init(false), cl::Hidden,
                                     cl::desc("Serialize each function as a pattern."));
+
+static cl::opt<std::string> patterdb_loc("patterndb", cl::init("./pattern.db"), cl::NotHidden, cl::desc("Path to pattern db file"));
 
 //=---------------------------------------------------------------------
 
@@ -76,6 +78,8 @@ bool Optmigrate::runOnFunction(Function &F) {
     return false;
 
   bool modified = false;
+
+  Module* M = F.getParent();
 
   if (DT && LI && SE) {
 
@@ -91,7 +95,7 @@ bool Optmigrate::runOnFunction(Function &F) {
       llvm::ViewGraph<const AbstractCFG *>(G, "foo", false, "Abstract control flow graph of " + F.getName());
 
     if (!create_pattern) {
-      PatternDB &db = PatternDB::load("pattern.db", SE);
+      PatternDB &db = PatternDB::load(M->getContext(), patterdb_loc.getValue());
 
       std::vector<MatchResult> matchings = db.find_matchings(G, show_graphs);
 

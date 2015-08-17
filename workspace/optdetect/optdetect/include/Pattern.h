@@ -30,34 +30,37 @@ namespace optmig {
 class Pattern : public ilist_node<Pattern> {
 
 private:
-  Pattern(const std::string name, Function *F, const AbstractCFG *cfg) : name(name), F(F), H(cfg) {}
+  Pattern(const std::string name, Function *AccFn, const AbstractCFG *cfg, std::map<Value *, uint64_t> binding)
+	: name(name), AcceleratorFcn(AccFn), H(cfg), binding(binding)
+	{}
 
-  Function *F = nullptr;
 
-  std::vector<u_int64_t> binding;
+  Function *AcceleratorFcn;
+  std::map<Value *, uint64_t> binding;
 
   const AbstractCFG *H;
   std::string name;
 
 public:
-  static Pattern *create_from_file(const std::string &filename);
-  static Pattern *create_from_obj(const json &pattern, ScalarEvolution *SE);
+  static Pattern *create_from_file(LLVMContext &context, const std::string &filename);
+  static Pattern *create_from_obj(LLVMContext &context, const json &pattern);
 
   const AbstractCFG *getCFG() { return H; }
 
-  Function* get_function(){ return F; }
+  Function* get_function(){ return getCFG()->get_function(); }
 
-  std::vector<u_int64_t>& get_binding(){ return binding;}
+  Function* get_hwiface(){ return AcceleratorFcn; }
+
+  std::map<Value*, u_int64_t>& get_binding(){ return binding;}
 
   void view() {
 
-    llvm::ViewGraph<const AbstractCFG *>(getCFG(), "foo", false, "Pattern control flow graph of " + F->getName());
+    llvm::ViewGraph<const AbstractCFG *>(getCFG(), "foo", false, "Pattern control flow graph of " + get_function()->getName());
   }
 
   virtual ~Pattern() {
 
 	  delete H;
-	  delete F;
   }
 };
 }
@@ -82,7 +85,7 @@ public:
 
 private:
 
-  bool resolve_binding(SmallVector<Value *, 8> &value_binding);
+ bool resolve_binding(std::vector<Value*> &value_binding);
 
 };
 }
@@ -93,7 +96,7 @@ class PatternDB {
   friend class Pattern;
 
 public:
-  static PatternDB &load(const std::string &filename, ScalarEvolution *SE);
+  static PatternDB &load(LLVMContext &context, const std::string &filename);
 
   std::vector<MatchResult> find_matchings(const AbstractCFG *G, bool show_graphs);
 

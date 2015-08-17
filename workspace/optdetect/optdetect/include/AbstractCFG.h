@@ -9,10 +9,6 @@
 #define SCFG_HEADER_H_
 
 #include "llvm/IR/Function.h"
-#include "llvm/IR/CFG.h"
-
-#include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Analysis/LoopInfo.h"
 
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Debug.h"
@@ -158,12 +154,12 @@ private:
   AbstractCFG(AbstractCFG const &) = delete;
   void operator=(AbstractCFGNode const &) = delete;
 
-  DenseMap<BasicBlock *, AbstractCFGNode *> NodeBBmap;
+  DenseMap<const BasicBlock *, AbstractCFGNode *> NodeBBmap;
 
   void add_node(AbstractCFGNode *node) {
     node->set_parent(this);
     Nodes.push_back(node);
-    if (BasicBlock *BB = node->getBasicBlock())
+    if (const BasicBlock *BB = node->getBasicBlock())
       NodeBBmap.insert(std::make_pair(BB, node));
   }
 
@@ -175,7 +171,7 @@ private:
 
   Function *F;
 
-  static const AbstractCFG *_deserialize(Function *F, const json &Pattern, ScalarEvolution *SE);
+  static const AbstractCFG *_deserialize(LLVMContext& context, const json &Pattern);
 
 public:
   virtual ~AbstractCFG() {
@@ -189,16 +185,14 @@ public:
   /// Returns CFG on success, null otherwise
   static const AbstractCFG *createAbstractCFG(Function *F, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT);
 
-  AbstractCFGNode *get_node(BasicBlock *BB);
+  AbstractCFGNode *get_node(BasicBlock *BB) const;
 
   AbstractCFGNode *get_node(u_int64_t _id);
 
   Function *get_function() const { return F; }
 
-  static const AbstractCFG *deserialize(Function *F, std::ifstream &is, ScalarEvolution *SE);
-
-  static const AbstractCFG *deserialize(Function *F, const json &obj, ScalarEvolution *SE) {
-    return _deserialize(F, obj, SE);
+  static const AbstractCFG *deserialize(LLVMContext& context, const json &obj) {
+    return _deserialize(context, obj);
   }
   static void serialize(const AbstractCFG *G, const std::string &name) { WriteJSONGraph(G, name); }
 };
@@ -316,9 +310,37 @@ template <> struct JSONGraphTraits<const AbstractCFG *> : public DefaultJSONGrap
 
   static u_int64_t getUniqueNodeID(const AbstractCFGNode &N) { return (u_int64_t)N.get_uid(); }
 
+  std::string getGraphAttributes(const AbstractCFG &G) {
+
+    Function *F = G.get_function();
+    std::string str;
+    raw_string_ostream O(str);
+    O << "{ ";
+    O << "\"datalayout\": \"" << F->getParent()->getDataLayoutStr() << "\",";
+
+    O << "\"interface\": ";
+    O << "\"";
+    O << "define " << *F->getReturnType() << " @" << F->getName() << "(";
+    Function::ArgumentListType &arglist = F->getArgumentList();
+    int index = 0;
+    for (auto i = arglist.begin(), e = arglist.end(); i != e; ++i) {
+      Argument *arg = &*i;
+      O << *arg;
+      if (++index != arglist.size())
+        O << ", ";
+    }
+    O << ")\",";
+    O << "\"hw_interface\": {";
+    O << "\"name\": \"\",";
+    O << "\"binding\": [] ";
+    O << "}";
+    O << "}";
+    return O.str();
+  }
+
   static std::string getNodeAttributes(const AbstractCFGNode &N, const AbstractCFG &G) {
 
-    std::string str = "";
+    std::string str;
     raw_string_ostream O(str);
     O << "{ ";
     O << "\"labels\": ";
@@ -331,22 +353,22 @@ template <> struct JSONGraphTraits<const AbstractCFG *> : public DefaultJSONGrap
     label_string.erase(label_string.end() - 1, label_string.end());
     label_string += "]";
 
-    O << label_string;
+    O << label_string << ",";
 
-    const std::vector<Expression *> &expressions = N.get_expressions();
+    const BasicBlock *BB = N.getBasicBlock();
 
-    if (!expressions.empty()) {
-      O << ", ";
-      O << "\"expressions\": [";
-      for (auto it = expressions.begin(), e = expressions.end(); it != e; ++it) {
-
-        JSONGraphWriter<const Expression *> JSONWriter(O, *it, false);
-        JSONWriter.writeGraph();
-        if (it + 1 != e)
-          O << ",";
-      }
-      O << "]";
+    O << "\"name\": \"" << BB->getName() << "\",";
+    O << "\"ir\": [";
+    int index = 0;
+    for (BasicBlock::const_iterator i = BB->begin(), e = BB->end(); i != e; ++i) {
+      // The next statement works since operator<<(ostream&,...)
+      // is overloaded for Instruction&
+      O << "\"" << *i << "\"";
+      if (++index != BB->getInstList().size())
+        O << ",";
     }
+    O << "]";
+
     O << " }";
     return O.str();
   }

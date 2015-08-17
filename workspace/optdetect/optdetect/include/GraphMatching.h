@@ -30,9 +30,9 @@ public:
   typedef typename GTraits::nodes_iterator node_iterator;
   typedef typename GTraits::ChildIteratorType child_iterator;
 
-  typedef typename std::pair<const NodeType *, const NodeType *> AssignT;
-  typedef typename std::set<NodeType *> CandidatesT;
-  typedef typename std::map<const NodeType *, const NodeType *> AssignmentT;
+  typedef typename std::pair<NodeType *, NodeType *> AssignT;
+  typedef typename std::vector<NodeType *> CandidatesT;
+  typedef typename std::map<NodeType *, NodeType *> AssignmentT;
   typedef typename std::map<NodeType *, CandidatesT> PAssignmentT;
 
   static bool match_binary_trees(const GraphT *T1, const GraphT *T2, AssignmentT &mapping) {
@@ -42,8 +42,8 @@ public:
     if (T1 == nullptr || T2 == nullptr)
       return false;
 
-    const NodeType *RootT1 = GTraits::getEntryNode(T1);
-    const NodeType *RootT2 = GTraits::getEntryNode(T2);
+    NodeType *RootT1 = GTraits::getEntryNode(T1);
+    NodeType *RootT2 = GTraits::getEntryNode(T2);
 
     return backtrack_binary_tree(RootT1, RootT2, mapping);
   }
@@ -226,7 +226,7 @@ private:
       if (assignment.find(Y) != assignment.end())
         continue;
 
-      std::set<NodeType *> &candidates = possible_assignments[Y];
+      CandidatesT &candidates = possible_assignments[Y];
       if (candidates.empty())
         return false;
       for (NodeType *X : candidates) {
@@ -236,7 +236,8 @@ private:
         // remove X from all possible assignments except
         PAssignmentT new_possible_assignment = possible_assignments;
 
-        if (update_possible_assignment(Y, X, new_possible_assignment) && backtrack(G, H, new_possible_assignment, assignment))
+        if (update_possible_assignment(Y, X, new_possible_assignment) &&
+            backtrack(G, H, new_possible_assignment, assignment))
           return true;
 
         assignment.erase(iter);
@@ -257,9 +258,13 @@ private:
 
       if (N == Y) {
         candidates.clear();
-        candidates.insert(X);
+        candidates.push_back(X);
       } else {
-        candidates.erase(X);
+
+        auto pos = std::find(candidates.begin(), candidates.end(), X);
+        if (pos != candidates.end()) {
+          candidates.erase(pos);
+        }
         if (candidates.empty())
           return false;
       }
@@ -306,7 +311,7 @@ private:
       DegT deg_g = get_node_degrees(G, M);
 
       if (deg_g >= deg_h && narrowfn(N, M))
-        P.insert(M);
+        P.push_back(M);
     }
 
     return P;
@@ -345,7 +350,7 @@ private:
       for (auto IB = Assignments.begin(), IE = Assignments.end(); IB != IE; ++IB) {
 
         NodeType *Y = (*IB).first;
-        std::set<NodeType *> &C = (*IB).second;
+        CandidatesT &C = (*IB).second;
 
         for (auto ICXB = C.begin(); ICXB != C.end();) {
 
@@ -360,7 +365,7 @@ private:
 
             NodeType *N_y = *IChildsYB;
 
-            std::set<NodeType *> &assignments_N = Assignments[N_y];
+            CandidatesT &assignments_N = Assignments[N_y];
             for (child_iterator IChildsXB = GraphTraits<NodeType *>::child_begin(X),
                                 IChildsXE = GraphTraits<NodeType *>::child_end(X);
                  IChildsXB != IChildsXE; ++IChildsXB) {
@@ -397,7 +402,7 @@ private:
     return false;
   }
 
-  static bool backtrack_binary_tree(const NodeType *lhs, const NodeType *rhs, AssignmentT &mapping) {
+  static bool backtrack_binary_tree(NodeType *lhs, NodeType *rhs, AssignmentT &mapping) {
 
     if (nullptr == lhs || nullptr == rhs)
       return false;
@@ -408,19 +413,17 @@ private:
       return false;
 
     // nodes have to have an equal amount of children
-    if (std::distance(GraphTraits<const NodeType *>::child_begin(lhs), GraphTraits<const NodeType *>::child_end(lhs)) !=
-        std::distance(GraphTraits<const NodeType *>::child_begin(rhs), GraphTraits<const NodeType *>::child_end(rhs)))
+    if (std::distance(GraphTraits<NodeType *>::child_begin(lhs), GraphTraits<NodeType *>::child_end(lhs)) !=
+        std::distance(GraphTraits<NodeType *>::child_begin(rhs), GraphTraits<NodeType *>::child_end(rhs)))
       return false;
 
     bool children_match = true;
-    for (auto ILB = GraphTraits<const NodeType *>::child_begin(lhs),
-              ILE = GraphTraits<const NodeType *>::child_end(lhs),
-              IRB = GraphTraits<const NodeType *>::child_begin(rhs),
-              IRE = GraphTraits<const NodeType *>::child_end(rhs);
+    for (auto ILB = GraphTraits<NodeType *>::child_begin(lhs), ILE = GraphTraits<NodeType *>::child_end(lhs),
+              IRB = GraphTraits<NodeType *>::child_begin(rhs), IRE = GraphTraits<NodeType *>::child_end(rhs);
          ILB != ILE; ++ILB, ++IRB) {
 
-      const NodeType *newLhs = *ILB;
-      const NodeType *newRhs = *IRB;
+      NodeType *newLhs = *ILB;
+      NodeType *newRhs = *IRB;
 
       children_match = backtrack_binary_tree(newLhs, newRhs, mapping);
     }

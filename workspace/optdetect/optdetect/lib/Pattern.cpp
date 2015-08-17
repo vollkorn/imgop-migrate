@@ -15,51 +15,95 @@ using optmig::Pattern;
 using optmig::PatternDB;
 using optmig::MatchResult;
 
-Pattern *Pattern::create_from_obj(const json &pattern, ScalarEvolution *SE) {
-  Pattern *p = nullptr;
-  json hwiface = pattern["hwiface"];
-  json hwiface_binding = hwiface["binding"];
+// trim from start
+static inline std::string &ltrim(std::string &s) {
+  s.erase(s.begin(), std::find_if(s.begin(), s.end(), std::not1(std::ptr_fun<int, int>(std::isspace))));
+  return s;
+}
 
-  std::string name = pattern["name"].as_string();
+// trim from end
+static inline std::string &rtrim(std::string &s) {
+  s.erase(std::find_if(s.rbegin(), s.rend(), std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
+  return s;
+}
+
+// trim from both ends
+static inline std::string &trim(std::string &s) { return ltrim(rtrim(s)); }
+
+static inline std::string normalize_value_name(std::string name) {
+
+  // trim left, right, remove %
+  auto pos = name.find("%");
+  name.erase(pos, 1);
+  trim(name);
+  return name;
+}
+//, std::map<Value *, uint64_t> &binding
+Function *create_hw_interface(Function *pattern, const json &hwiface, std::map<Value *, uint64_t> &binding) {
+  json hwiface_binding = hwiface["binding"];
   std::string hwiface_name = hwiface["name"].as_string();
 
-  dbgs() << "Loading pattern \"" << name << "\" into database\n";
-
   SmallVector<Type *, 8> ArgTy;
-  std::vector<uint64_t> binding;
 
-  LLVMContext &context = SE->getContext();
-
+  LLVMContext &context = getGlobalContext(); // pattern->getContext();
+  ValueSymbolTable &symtable = pattern->getValueSymbolTable();
   for (auto it = hwiface_binding.begin_elements(); it != hwiface_binding.end_elements(); ++it) {
-    uint64_t _id = ((*it)[0]).as_ulong();
-    std::string type = ((*it)[1]).as_string();
-
-    ArgTy.push_back(Expression::type_from_str(context, type));
-    binding.push_back(_id);
+    std::string valuename = ((*it)[0]).as_string();
+    uint64_t argindex = ((*it)[1]).as_long();
+    valuename = normalize_value_name(valuename);
+    Value *val = symtable.lookup(valuename);
+    if (!val) {
+      errs() << "Could not resolve name in binding: " << valuename << "\n";
+      return nullptr;
+    }
+    ArgTy.push_back(val->getType());
+    binding.insert(std::make_pair(val, argindex));
   }
 
   FunctionType *fnty = FunctionType::get(FunctionType::getInt1Ty(context), ArgTy, false);
+  Function *F = Function::Create(fnty, Function::ExternalLinkage, "hwiface_" + hwiface_name);
 
-  Function *F = Function::Create(fnty, Function::ExternalLinkage, "hwiface_" + name);
+  return F;
+}
 
-  const AbstractCFG *H = AbstractCFG::deserialize(F, pattern, SE);
+Pattern *Pattern::create_from_obj(LLVMContext &context, const json &pattern) {
 
-  if (H && !name.empty() && F)
-    p = new Pattern(name, F, H);
+  json attributes = pattern["attributes"];
 
-  if (p) {
-    p->binding = binding;
+  json hwiface = attributes["hw_interface"];
+
+  std::string name = pattern["name"].as_string();
+
+  dbgs() << "Loading pattern \"" << name << "\" into database\n";
+
+  const AbstractCFG *H = AbstractCFG::deserialize(context, pattern);
+
+  Function *PatternFn = H->get_function();
+
+  std::map<Value *, uint64_t> binding;
+  Function *HwFn = create_hw_interface(PatternFn, hwiface, binding);
+
+  Pattern *p;
+  if (H && !name.empty()) {
+    p = new Pattern(name, HwFn, H, binding);
     p->view();
   }
 
   return p;
 }
 
-bool MatchResult::resolve_binding(SmallVector<Value *, 8> &value_binding) {
+bool MatchResult::resolve_binding(std::vector<Value *> &value_binding) {
 
-  std::vector<uint64_t> binding = P->get_binding();
+  std::map<Value *, uint64_t> &binding = P->get_binding();
 
-  for (uint64_t id : binding) {
+  value_binding.resize(binding.size());
+
+  unsigned num_bound = 0;
+  // rhs value from pattern
+  // lhs value from candidate
+  for (auto it_binding = binding.begin(), end_binding = binding.end(); it_binding != end_binding; ++it_binding) {
+    Value *rhs = (*it_binding).first;
+    u_int8_t pos = (*it_binding).second;
     for (auto it = ExpressionMapping.begin(), end = ExpressionMapping.end(); it != end; ++it) {
       Expression *EP = (*it).first;
       Value *cval = nullptr;
@@ -67,7 +111,7 @@ bool MatchResult::resolve_binding(SmallVector<Value *, 8> &value_binding) {
       GraphMatcher<Expression>::AssignmentT &assignment = (*it).second;
 
       auto i = std::find_if(assignment.begin(), assignment.end(),
-                            [&id](GraphMatcher<Expression>::AssignT a) { return a.first->get_unique_id() == id; });
+                            [&rhs](GraphMatcher<Expression>::AssignT a) { return a.first->getValue() == rhs; });
 
       if (i != assignment.end()) {
         // get assigned candidate node
@@ -76,16 +120,19 @@ bool MatchResult::resolve_binding(SmallVector<Value *, 8> &value_binding) {
       }
 
       if (cval) {
-        value_binding.push_back(cval);
+        cval->dump();
+        value_binding[pos] = cval;
+        num_bound++;
         break;
       }
     }
   }
-
-  if (binding.size() != value_binding.size()) {
-    errs() << "Arguments not bound: " << (binding.size() - value_binding.size()) << "\n";
+  if (binding.size() != num_bound) {
+    errs() << "Arguments not bound: " << (binding.size() - num_bound) << "\n";
     return false;
   }
+
+
   return true;
 }
 
@@ -110,11 +157,11 @@ bool MatchResult::try_offload() {
 
   if (!Entry && !Exit)
     return false;
-  SmallVector<Value *, 8> binding;
-  if (!resolve_binding(binding))
-    return false;
 
   LLVMContext &context = Entry->getContext();
+
+  std::vector<Value*> binding;
+  resolve_binding(binding);
 
   Module *M = Entry->getParent()->getParent();
 
@@ -140,7 +187,11 @@ bool MatchResult::try_offload() {
   // Create prototype of external defined hw accelerator function
   IRBuilder<> builder(BB);
   Function *F = P->get_function();
-  Function *proto = Function::Create(F->getFunctionType(), Function::ExternalLinkage, F->getName(), M);
+
+  Function *proto = P->get_hwiface();
+
+  M->getFunctionList().push_back(proto);
+
   CallInst *hwcall = builder.CreateCall(proto, binding);
   builder.CreateCondBr(hwcall, Entry, Exit);
 
@@ -248,7 +299,7 @@ std::vector<MatchResult> PatternDB::find_matchings(const AbstractCFG *G, bool sh
   return matchings;
 }
 
-PatternDB &PatternDB::load(const std::string &filename, ScalarEvolution *SE) {
+PatternDB &PatternDB::load(LLVMContext &context, const std::string &filename) {
   static PatternDB instance;
 
   if (instance.init)
@@ -260,7 +311,7 @@ PatternDB &PatternDB::load(const std::string &filename, ScalarEvolution *SE) {
 
     json pattern = (*it);
 
-    Pattern *p = Pattern::create_from_obj(pattern, SE);
+    Pattern *p = Pattern::create_from_obj(getGlobalContext(), pattern);
 
     if (p)
       instance.db.push_back(p);

@@ -9,6 +9,7 @@
 #define JSONGRAPHWRITER_H_
 
 #include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/Support/GraphWriter.h"
 
 #include "llvm/Support/FileSystem.h"
@@ -61,12 +62,9 @@ struct DefaultJSONGraphTraits {
   static void addCustomGraphFeatures(const GraphType &, GraphWriter &) {}
 };
 
-
-template <typename Ty>
-struct JSONGraphTraits : public DefaultJSONGraphTraits {
-	JSONGraphTraits () : DefaultJSONGraphTraits () {}
+template <typename Ty> struct JSONGraphTraits : public DefaultJSONGraphTraits {
+  JSONGraphTraits() : DefaultJSONGraphTraits() {}
 };
-
 
 } // end anonymous namespace
 
@@ -91,11 +89,13 @@ public:
   JSONGraphWriter(raw_ostream &o, const GraphType &g, bool SN) : O(o), G(g) { JTraits = JSONTraits(); }
 
   void writeGraph() {
-	json obj;
-	obj["name"] = JTraits.getGraphName(*G);
+    json obj;
+    obj["name"] = JTraits.getGraphName(*G);
 
-	obj["graph"] = json::an_array;
-    json& graph = obj["graph"];
+    obj["attributes"] = json::parse_string(JTraits.getGraphAttributes(*G));
+
+    obj["graph"] = json::an_array;
+    json &graph = obj["graph"];
 
     json nodes;
     json nodes_arr(json::an_array);
@@ -113,21 +113,23 @@ public:
     graph.add(nodes);
     graph.add(edges);
 
-	std::stringstream _sstream;
+    std::stringstream _sstream;
     _sstream << pretty_print(obj);
 
     O << _sstream.str();
   }
 
 private:
-
   void writeHeader(const std::string &Title) {}
 
   void writeNodes(json &nodes) {
 
-    for (auto NB = GTraits::nodes_begin(G), NE = GTraits::nodes_end(G); NB != NE; ++NB) {
+    Function *F = G->get_function();
 
-      const NodeType *Node = *NB;
+    for (Function::iterator i = F->begin(), e = F->end(); i != e; ++i){
+      // Print out the name of the basic block if it has one, and then the
+      // number of instructions that it contains
+      const NodeType *Node = G->get_node(&*i);
 
       json node;
       json labels(json::an_array);
@@ -151,7 +153,8 @@ private:
 
       const NodeType *Src = *NB;
 
-      for (auto SB = GraphTraits<const NodeType *>::child_begin(Src), SE = GraphTraits<const NodeType *>::child_end(Src);
+      for (auto SB = GraphTraits<const NodeType *>::child_begin(Src),
+                SE = GraphTraits<const NodeType *>::child_end(Src);
            SB != SE; ++SB) {
         const NodeType *Dst = *SB;
         json edge;
@@ -163,8 +166,8 @@ private:
 
   void writeEdge(json &edge, const NodeType *Src, const NodeType *Dst) {
 
-      edge["src"] = JTraits.getUniqueNodeID(*Src);
-      edge["dst"] = JTraits.getUniqueNodeID(*Dst);
+    edge["src"] = JTraits.getUniqueNodeID(*Src);
+    edge["dst"] = JTraits.getUniqueNodeID(*Dst);
   }
 
   bool isNodeHidden(NodeType *Node) { return JTraits.isNodeHidden(Node); }
@@ -177,12 +180,11 @@ private:
   };
 };
 
-template <typename GraphType>
-std::string WriteJSONGraph(const GraphType &G, const std::string &Name) {
+template <typename GraphType> std::string WriteJSONGraph(const GraphType &G, const std::string &Name) {
   int FD = -1;
 
   std::string Filename = Name + ".json";
-//  std::error_code EC = sys::fs::createTemporaryFile(Name, "json", FD, Filename);
+
   std::error_code EC = sys::fs::openFileForWrite(Filename, FD, sys::fs::OpenFlags::F_RW);
   if (EC) {
     errs() << "Error: " << EC.message() << "\n";

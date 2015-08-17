@@ -5,10 +5,29 @@
  *      Author: lukas
  */
 
+#include "llvm/Support/SourceMgr.h"
+
+#include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/LoopInfo.h"
+
+#include "llvm/Target/TargetLibraryInfo.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Verifier.h"
+
+#include "llvm/AsmParser/Parser.h"
+
+#include "llvm/Pass.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/LegacyPassManagers.h"
+
 #include "AbstractCFG.h"
 
 using optmig::AbstractCFG;
 using optmig::AbstractCFGNode;
+
 
 void AbstractCFGNode::print(raw_ostream &O) const {
 
@@ -27,10 +46,12 @@ void AbstractCFGNode::print(raw_ostream &O) const {
     O << " @ " << BB->getName();
 }
 
-AbstractCFGNode *AbstractCFG::get_node(BasicBlock *BB) {
+AbstractCFGNode *AbstractCFG::get_node(BasicBlock *BB) const {
 
-  if (NodeBBmap.find(BB) != NodeBBmap.end())
-    return NodeBBmap[BB];
+  if (NodeBBmap.find(BB) != NodeBBmap.end()) {
+    auto obj = NodeBBmap.find(BB);
+    return (*obj).second;
+  }
   return nullptr;
 }
 
@@ -38,17 +59,6 @@ AbstractCFGNode *AbstractCFG::get_node(u_int64_t _id) {
   iterator iter = std::find_if(Nodes.begin(), Nodes.end(), [&](AbstractCFGNode *N) { return N->get_uid() == _id; });
 
   return *iter;
-}
-
-const AbstractCFG *AbstractCFG::deserialize(Function *F, std::ifstream &is, ScalarEvolution *SE) {
-  const AbstractCFG *H = nullptr;
-
-  if (is.is_open()) {
-    json v = json::parse(is);
-    H = _deserialize(F, v, SE);
-    is.close();
-  }
-  return H;
 }
 
 const AbstractCFG *AbstractCFG::createAbstractCFG(Function *F, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT) {
@@ -82,73 +92,154 @@ const AbstractCFG *AbstractCFG::createAbstractCFG(Function *F, LoopInfo &LI, Sca
   return T;
 }
 
-const AbstractCFG *AbstractCFG::_deserialize(Function *F, const json &Pattern, ScalarEvolution *SE) {
+void run_analysis_passes(std::vector<Pass *> passes, Function &F) {
+  Module *M = F.getParent();
+  llvm::legacy::FunctionPassManager FP(M);
+  FPPassManager *FPM = new FPPassManager();
+  AnalysisResolver *AR = new AnalysisResolver(*FPM);
 
-  std::map<unsigned, AbstractCFGNode *> id_node_map;
 
-  AbstractCFG *G = new AbstractCFG(F);
+  passes.insert(passes.begin(), new TargetLibraryInfo());
 
-  json graph = Pattern["graph"];
-  json nodes = graph[0]["nodes"];
-  json edges = graph[1]["edges"];
+  for (auto it = passes.begin(), end = passes.end(); it != end; ++it) {
+    Pass *p = *it;
+    p->setResolver(AR);
+    switch (p->getPassKind()) {
+    case PassKind::PT_Module: {
+      ModulePass *mp = static_cast<ModulePass *>(p);
+      mp->runOnModule(*M);
+      break;
+    }
+    case PassKind::PT_Function: {
+      FunctionPass *fp = static_cast<FunctionPass *>(p);
+      fp->runOnFunction(F);
+      break;
+    }
+    default: { errs() << "Cannot handle pass of kind " << p->getPassID() << "\n"; }
+    }
+    FPM->getAvailableAnalysis()->insert(std::make_pair(p->getPassID(), p));
+    AR->addAnalysisImplsPair(p->getPassID(), p);
 
-  std::map<u_int64_t, ExpressionNode*> lazyReference;
+  }
+}
+
+const AbstractCFG *AbstractCFG::_deserialize(LLVMContext &context, const json &Pattern) {
+
+  json interface  = Pattern["attributes"]["interface"];
+  json datalayout = Pattern["attributes"]["datalayout"];
+  json nodes = Pattern["graph"][0]["nodes"];
+  json edges = Pattern["graph"][1]["edges"];
+
+  std::string AsmString;
+  AsmString.append("target datalayout = \"" +datalayout.as_string() + "\"\n");
+  AsmString.append(interface.as_string() + "{\n");
 
   for (auto it = nodes.begin_elements(); it != nodes.end_elements(); ++it) {
     unsigned _id = (*it)["_id"].as_uint();
-
     json attributes = (*it)["attributes"];
-    AbstractCFGNode *N = nullptr;
-    Expression *AT = nullptr, *BT = nullptr;
-    BasicBlock *BB = BasicBlock::Create(F->getContext(), "blk_" + utostr_32(_id), F, nullptr);
-    std::vector<AbstractCFGNode::Label> labels;
-    std::vector<Expression *> expressions;
-    if (!attributes.is_empty()) {
 
-      if (attributes.has_member("labels")) {
-        std::vector<unsigned> parsed_labels = attributes["labels"].as_vector<unsigned>();
-
-        std::for_each(parsed_labels.begin(), parsed_labels.end(),
-                      [&](unsigned lbl) { labels.push_back(static_cast<AbstractCFGNode::Label>(lbl)); });
-      }
-
-      if (attributes.has_member("expressions")) {
-        json e = attributes["expressions"];
-        for (auto eit = e.begin_elements(), eend = e.end_elements(); eit != eend; ++eit) {
-          Expression* expression = Expression::deserialize(BB, *eit, SE, lazyReference);
-          if (expression != nullptr)
-            expressions.push_back(expression);
-        }
-      }
+    std::string bbname = attributes["name"].as_string();
+    json ir = attributes["ir"];
+    AsmString.append(bbname + ":\n");
+    for (auto it_ir = ir.begin_elements(); it_ir != ir.end_elements(); ++it_ir) {
+      std::string val = (*it_ir).as_string();
+      AsmString.append(val);
+      AsmString.append("\n");
     }
-
-    N = new AbstractCFGNode(labels, BB);
-    if (N) {
-      N->add_expression(expressions);
-      id_node_map.insert(std::make_pair(_id, N));
-      G->add_node(N);
-    }
+    AsmString.append("\n");
   }
+  AsmString.append("}");
 
-  for(auto it = lazyReference.begin(), end = lazyReference.end(); it != end; ++it){
+  SMDiagnostic Err;
+  std::unique_ptr<Module> M_ = parseAssemblyString(AsmString, Err, context);
+  Module* M = M_.release();
 
-	  u_int64_t id = (*it).first;
-	  ExpressionNode* n = (*it).second;
-
-	  n->Reference = id_node_map[id];
-
+  if(!M){
+	  errs() << "Could not create pattern!\n";
+	  Err.print(Pattern["name"].as_string().c_str(), errs(), true);
+	  return nullptr;
   }
-  for (auto it = edges.begin_elements(); it != edges.end_elements(); ++it) {
+  assert(M->getFunctionList().size() == 1 && "Module contains more than one pattern");
 
-    unsigned src_id = (*it)["src"].as_uint();
-    unsigned dst_id = (*it)["dst"].as_uint();
-    AbstractCFGNode *&src = id_node_map[src_id];
-    AbstractCFGNode *&dst = id_node_map[dst_id];
+  Function& F = M->getFunctionList().back();
+  F.dump();
+  if(verifyFunction(F, &errs()))
+	  return nullptr;
 
-    src->add_child(dst);
-  }
-  return G;
+  LoopInfo *LI = new LoopInfo();
+  ScalarEvolution *SE = new ScalarEvolution();
+  DominatorTreeWrapperPass *DT = new DominatorTreeWrapperPass();
+  AssumptionCacheTracker *ACT = new AssumptionCacheTracker();
+  DataLayoutPass *DL = new DataLayoutPass();
+
+  std::vector<Pass *> passes = { DL, ACT, DT, LI, SE };
+
+  run_analysis_passes(passes, F);
+
+  const AbstractCFG *H = createAbstractCFG(&F, *LI, *SE, DT->getDomTree());
+
+  return H;
 }
+
+// json graph = Pattern["graph"];
+// json nodes = graph[0]["nodes"];
+// json edges = graph[1]["edges"];
+//
+// std::map<u_int64_t, ExpressionNode*> lazyReference;
+//
+// for (auto it = nodes.begin_elements(); it != nodes.end_elements(); ++it) {
+//  unsigned _id = (*it)["_id"].as_uint();
+//
+//  json attributes = (*it)["attributes"];
+//  AbstractCFGNode *N = nullptr;
+//  Expression *AT = nullptr, *BT = nullptr;
+//  BasicBlock *BB = BasicBlock::Create(F->getContext(), "blk_" + utostr_32(_id), F, nullptr);
+//  std::vector<AbstractCFGNode::Label> labels;
+//  std::vector<Expression *> expressions;
+//  if (!attributes.is_empty()) {
+//
+//    if (attributes.has_member("labels")) {
+//      std::vector<unsigned> parsed_labels = attributes["labels"].as_vector<unsigned>();
+//
+//      std::for_each(parsed_labels.begin(), parsed_labels.end(),
+//                    [&](unsigned lbl) { labels.push_back(static_cast<AbstractCFGNode::Label>(lbl)); });
+//    }
+//
+//    if (attributes.has_member("expressions")) {
+//      json e = attributes["expressions"];
+//      for (auto eit = e.begin_elements(), eend = e.end_elements(); eit != eend; ++eit) {
+//        Expression* expression = Expression::deserialize(BB, *eit, SE, lazyReference);
+//        if (expression != nullptr)
+//          expressions.push_back(expression);
+//      }
+//    }
+//  }
+//
+//  N = new AbstractCFGNode(labels, BB);
+//  if (N) {
+//    N->add_expression(expressions);
+//    id_node_map.insert(std::make_pair(_id, N));
+//    G->add_node(N);
+//  }
+//}
+//
+// for(auto it = lazyReference.begin(), end = lazyReference.end(); it != end; ++it){
+//
+//	  u_int64_t id = (*it).first;
+//	  ExpressionNode* n = (*it).second;
+//
+//	  n->Reference = id_node_map[id];
+//
+//}
+// for (auto it = edges.begin_elements(); it != edges.end_elements(); ++it) {
+//
+//  unsigned src_id = (*it)["src"].as_uint();
+//  unsigned dst_id = (*it)["dst"].as_uint();
+//  AbstractCFGNode *&src = id_node_map[src_id];
+//  AbstractCFGNode *&dst = id_node_map[dst_id];
+//
+//  src->add_child(dst);
+//}
 
 bool AbstractCFG::recursiveTraverse(AbstractCFG *T, BasicBlock *BB, AbstractCFGNode *parent,
                                     std::set<BasicBlock *> &visited, LoopInfo *LI, ScalarEvolution *SE) {
@@ -162,7 +253,7 @@ bool AbstractCFG::recursiveTraverse(AbstractCFG *T, BasicBlock *BB, AbstractCFGN
     return true;
   }
 
-  TerminatorInst *term = BB->getTerminator();
+  const TerminatorInst *term = BB->getTerminator();
 
   std::vector<AbstractCFGNode::Label> Labels;
 
@@ -179,7 +270,7 @@ bool AbstractCFG::recursiveTraverse(AbstractCFG *T, BasicBlock *BB, AbstractCFGN
           Labels.push_back(AbstractCFGNode::LOOP_PRE_HEADER);
     }
 
-    if (BasicBlock *predecessor = BB->getSinglePredecessor()) {
+    if (const BasicBlock *predecessor = BB->getSinglePredecessor()) {
       if (Loop *L = LI->getLoopFor(predecessor))
         if (BB == L->getExitBlock())
           Labels.push_back(AbstractCFGNode::LOOP_EXIT);

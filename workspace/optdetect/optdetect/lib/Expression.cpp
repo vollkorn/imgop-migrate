@@ -60,18 +60,20 @@ bool ExpressionNode::maps_to(const ExpressionNode &other) const {
         // In case of phi nodes, check if they have equal induction
         // structure
         if (isa<PHINode>(inst_1) && isa<PHINode>(inst_2)) {
-          InductionDescription::MapResult mapresult = ival.map_to(other.ival);
+          if (ival.valid() && other.ival.valid()) {
+            InductionDescription::MapResult mapresult = ival.map_to(other.ival);
 
-          switch (mapresult) {
-          case InductionDescription::MapResult::IDesc_Map_Ok:
-            return true;
-          case InductionDescription::MapResult::IDesc_Map_Invalid:
-            return false;
-          case InductionDescription::MapResult::IDesc_Map_Resolve_Exit: {
+            switch (mapresult) {
+            case InductionDescription::MapResult::IDesc_Map_Ok:
+              return true;
+            case InductionDescription::MapResult::IDesc_Map_Invalid:
+              return false;
+            case InductionDescription::MapResult::IDesc_Map_Resolve_Exit: {
 
-            // TODO: take action here
-            return true;
-          }
+              // TODO: take action here
+              return true;
+            }
+            }
           }
         }
         return true;
@@ -95,8 +97,8 @@ bool ExpressionNode::maps_to(const ExpressionNode &other) const {
 void Expression::delete_recursive(ExpressionNode *node) {
 
   std::vector<ExpressionNode *> children = node->Children;
-  if (User *U = dyn_cast<User>(node->getValue()))
-    U->dropAllReferences();
+//  if (User *U = dyn_cast<User>(node->getValue()))
+//    U->dropAllReferences();
   delete node;
   for (auto it = children.begin(); it != children.end();) {
     delete_recursive(*it);
@@ -532,11 +534,10 @@ Expression *Expression::calculateBranchExpression(BasicBlock *BB, ScalarEvolutio
     CmpInst *cmp = dyn_cast<CmpInst>(branch->getOperand(0)); // get comparison
 
     return calculateExpression(BB, cmp, SE, LI);
-
   }
-//  else {
-//    dbgs() << "Cannot compute branch expression from non branch instrucion" << *term << "\n";
-//  }
+  //  else {
+  //    dbgs() << "Cannot compute branch expression from non branch instrucion" << *term << "\n";
+  //  }
   return nullptr;
 }
 
@@ -606,7 +607,7 @@ static InductionDescription FindPotentialInduction(PHINode *phi, LoopInfo *LI, S
   uint64_t PhiWidth = SE->getTypeSizeInBits(AR->getType());
 
   // Avoid comparing an integer IV against a pointer Limit.
-  if (PhiWidth < BCWidth || !L->getHeader()->getParent()->getParent()->getDataLayout()->isLegalInteger(PhiWidth))
+  if (PhiWidth < BCWidth)
     return {};
 
   const SCEVConstant *Step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(*SE));
@@ -657,12 +658,15 @@ Expression *Expression::calculateExpression(BasicBlock *BB, Instruction *inst, S
 
   SmallVector<std::pair<Value *, ExpressionNode *>, 8> stack;
   stack.push_back(std::make_pair(inst, nullptr));
-
+  SmallPtrSet<Value *, 16> visisted;
   while (!stack.empty()) {
 
     auto stack_val = stack.pop_back_val();
     Value *val = stack_val.first;
     ExpressionNode *CurNode = stack_val.second;
+
+    if (!visisted.insert(val).second)
+      continue;
 
     ExpressionNode *node = T->getNodeFor(val);
     if (node && CurNode != nullptr) {
@@ -692,24 +696,17 @@ Expression *Expression::calculateExpression(BasicBlock *BB, Instruction *inst, S
         node = new ExpressionNode(T, val);
       }
 
-      if (!node->isInductionValue())	// do not consider already visited nodes
+      if (!node->isInductionValue()) // do not consider already visited nodes
         for (Use &U : instr->operands()) {
           Value *operand = U.get();
           stack.push_back(std::make_pair(operand, node)); // visit each operand
         }
-    } else if (isa<Constant>(val)) {
+    } else {
 
-      Constant *_const = dyn_cast<Constant>(val);
-
-      node = new ExpressionNode(T, _const);
-    } else if (isa<Argument>(val)) {
-
-      Argument *arg = dyn_cast<Argument>(val);
-
-      node = new ExpressionNode(T, arg);
+      node = new ExpressionNode(T, val);
     }
 
-    if (nullptr != node) {
+    if (node != nullptr) {
       T->add_node(node);
       if (CurNode != nullptr)
         CurNode->add_child(CurNode->begin(), node);
