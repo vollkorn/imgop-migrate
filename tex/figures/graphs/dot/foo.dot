@@ -1,0 +1,123 @@
+digraph "Abstract control flow graph of foo" {
+graph [rankdir="same" ,compound="true"];
+newrank=true;
+    subgraph cluster_cfg{ 
+        edge [arrowsize=.5]
+        //edge[style=dashed]
+	    Node0x4cc5420 [shape=circle,label="entry"];
+	    Node0x4cc5420 -> Node0x4cc62b0;
+	    Node0x4cc5420 -> Node0x4ccadb0;
+	    Node0x4cc62b0 [shape=circle,label="loop_pre_header"];
+	    Node0x4cc62b0 -> Node0x4cc65b0;
+	    Node0x4cc65b0 [shape=circle,label="loop_header\nloop_inc\nloop_body"];
+	    Node0x4cc65b0 -> Node0x4ccaad0;
+	    Node0x4cc65b0 -> Node0x4cc65b0;
+	    Node0x4ccaad0 [shape=circle,label="loop_exit"];
+	    Node0x4ccaad0 -> Node0x4ccadb0;
+	    Node0x4ccadb0 [shape=circle,label="exit"];
+    }
+/*
+    subgraph cluster_0x4ccbcd0{ 
+    
+	    Node0x4ccbcd0 [shape=rectangle,label="icmp"];
+	    Node0x4ccbcd0 -> Node0x4cc5d80[dir = back];
+	    Node0x4ccbcd0 -> Node0x4cc5ce0[dir = back];
+	    Node0x4cc5ce0 [shape=rectangle,label="const"];
+	    Node0x4cc5d80 [shape=rectangle,label="arg %n"];
+    } 
+	Node0x4cc5420 -> Node0x4ccbcd0 [style=dotted]
+
+	subgraph cluster_0x4cca660{ 
+	    Node0x4cca660 [shape=rectangle,label="icmp"];
+	    Node0x4cca660 -> Node0x4cca940[dir = back];
+	    Node0x4cca660 -> Node0x4cca720[dir = back];
+	    Node0x4cca720 [shape=rectangle,label="add"];
+	    Node0x4cca720 -> Node0x4cca880[dir = back];
+	    Node0x4cca720 -> Node0x4cca7e0[dir = back];
+	    Node0x4cca7e0 [shape=rectangle,label="const"];
+	    Node0x4cca880 [shape=rectangle,label="arg"];
+	    Node0x4cca940 [shape=rectangle,label="trunc"];
+	    Node0x4cca940 -> Node0x4cca9e0[dir = back];
+	    Node0x4cca9e0 [shape=rectangle,label="phi\n(0, 1, %n)"];
+    } 
+	Node0x4cc65b0 -> Node0x4cca660 [style=dotted]
+
+*/
+    subgraph cluster_0x4cc6870{ 
+        edge [arrowsize=.5] 
+        label="Pattern statement"
+	    Node0x4cc6870 [shape=rectangle,label="store"];
+	    Node0x4cc6870 -> Node0x4cca010[dir = back];
+	    Node0x4cc6870 -> Node0x4cc6930[dir = back];
+	    Node0x4cc6930 [shape=rectangle,label="getelementptr"];
+	    Node0x4cc6930 -> Node0x4cc9f70[dir = back];
+	    Node0x4cc6930 -> Node0x4cc9ed0[dir = back];
+	    Node0x4cc9ed0 [shape=rectangle,label="phi\n(0, 1, %n)"];
+	    Node0x4cc9f70 [shape=rectangle,label="arg %A"];
+	    Node0x4cca010 [shape=rectangle,label="sitofp"];
+	    Node0x4cca010 -> Node0x4cca100[dir = back];
+	    Node0x4cca100 [shape=rectangle,label="mul"];
+	    Node0x4cca100 -> Node0x4cca280[dir = back];
+	    Node0x4cca100 -> Node0x4cca1a0[dir = back];
+	    Node0x4cca1a0 [shape=rectangle,label="trunc"];
+	    Node0x4cca1a0 -> Node0x4cc9ed0[dir = back];
+	    Node0x4cca280 [shape=rectangle,label="add"];
+	    Node0x4cca280 -> Node0x4cca470[dir = back];
+	    Node0x4cca280 -> Node0x4cca340[dir = back];
+	    Node0x4cca340 [shape=rectangle,label="const"];
+	    Node0x4cca470 [shape=rectangle,label="mul"];
+	    Node0x4cca470 -> Node0x4cca1a0[dir = back];
+	    Node0x4cca470 -> Node0x4cca530[dir = back];
+	    Node0x4cca530 [shape=rectangle,label="const"];
+    } 
+	Node0x4cc65b0 -> Node0x4cc6870 [style=dotted]
+
+    subgraph cluster_candidate_stmt{ 
+        edge [arrowsize=.5]
+        label="Candidate statement"
+        style = filled;
+        color = 3
+        colorscheme = "paired12"
+	    a [shape=rectangle,label="store"];
+	    a -> b[dir = back];
+	    a -> c[dir = back];
+	    c [shape=rectangle,label="getelementptr"];
+	    c -> d[dir = back];
+	    c -> e[dir = back];
+	    e [shape=rectangle,label="phi\n(0, 1, %i)"];
+	    d [shape=rectangle,label="arg %M"];
+	    b [shape=rectangle,label="sitofp"];
+	    b -> f[dir = back];
+	    f [shape=rectangle,label="mul"];
+	    f -> g[dir = back];
+	    f -> h[dir = back];
+	    h [shape=rectangle,label="trunc"];
+	    h -> e[dir = back];
+	    g [shape=rectangle,label="add"];
+	    g -> i[dir = back];
+	    g -> j[dir = back];
+	    j [shape=rectangle,label="const 13"];
+	    i [shape=rectangle,label="mul"];
+	    i -> h[dir = back];
+	    i -> k[dir = back];
+	    k [shape=rectangle,label="const 42"];
+    }
+
+
+
+    Node0x4cc6870 -> a [style=dotted, dir="both", constraint = false]
+    Node0x4cc6930 -> c [style=dotted, dir="both", constraint = false]
+    Node0x4cc9ed0 -> e [style=dotted, dir="both", constraint = false]
+    Node0x4cc9f70 -> d [style=dotted, dir="both", constraint = false]
+    Node0x4cca010 -> b [style=dotted, dir="both", constraint = false]
+    Node0x4cca100 -> f [style=dotted, dir="both", constraint = false]
+    Node0x4cca1a0 -> h [style=dotted, dir="both", constraint = false]
+    Node0x4cca280 -> g [style=dotted, dir="both", constraint = false]
+    Node0x4cca340 -> j [style=dotted, dir="both", constraint = false]
+    Node0x4cca470 -> i [style=dotted, dir="both", constraint = false]
+    Node0x4cca530 -> k [style=dotted, dir="both", constraint = false]
+
+    { rank=same; a Node0x4cc6870}
+    { rank=same; Node0x4cc65b0 Node0x4cc6870}
+
+}

@@ -1,0 +1,51 @@
+\begin{figure}[!htb]
+\begin{tikzpicture}[remember picture]
+  \node (G) {
+  	\begin{tikzpicture}[main node/.style={circle,draw,minimum size=.8cm,inner sep=0pt}]
+		\node[main node] (G1) {$a$};
+		\node[main node] (G2) [right = 1cm of G1] {$b$};
+		\node[main node] (G3) [right = 1cm of G2] {$c$};
+		\node[main node] (G4) [right = 1cm of G3] {$d$};
+		\node[main node] (G5) [right = 1cm of G4] {$e$};
+		\node[main node] (G6) [below = 1.5cm of G2] {$f$};
+		\node[main node] (G7) [below = 1.5cm of G3] {$g$};
+		
+		\path[draw,thick]
+		(G1) edge node {} (G2)
+		(G2) edge node {} (G3)
+		(G3) edge node {} (G4)
+		(G4) edge node {} (G5)
+		(G2) edge node {} (G6)
+		(G3) edge node {} (G7)
+		(G6) edge node {} (G7)
+		(G4) edge [bend right=50] node {} (G2);
+  	\end{tikzpicture}
+  };
+	\node at (0,-2.5) {Graph G};
+    %%
+    \node(H)[right=of G]{
+	\begin{tikzpicture}[main node/.style={circle,draw,minimum size=.8cm,inner sep=0pt}]
+    \node[main node] (H1) {$1$};
+    \node[main node] (H2) [right = 1cm  of H1]  {$2$};
+    \node[main node] (H3) [right = 1cm  of H2] {$3$};
+    \node[main node] (H4) [right = 1cm  of H3] {$4$};
+
+    \path[draw,thick]
+     (H1) edge node {} (H2)
+     (H2) edge node {} (H3)
+     (H3) edge node {} (H4)
+     (H1) edge [bend left=50] node {} (H3)
+    ;
+    \end{tikzpicture}   
+    };   
+    \node at (8, -2.5) {Graph H};
+    \path[draw,dashed]
+    	(H1) edge [bend right=80, ->] node {} (G2)
+    	(H2) edge [bend right=80, ->] node {} (G3)
+    	(H3) edge [bend right=80, ->] node {} (G4)
+    	(H4) edge [bend right=80, ->] node {} (G5)
+    ;
+\end{tikzpicture}
+\caption{Example of a subgraph isomorphism}
+\label{fig:subgraphisoexample}
+\end{figure}

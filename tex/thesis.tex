@@ -6,11 +6,10 @@
 %
 % THIS IS THE MAIN FILE (i.e. compile this file, compiling the others directly won't work)
 %
-\documentclass[a4paper,11pt,twoside]{report}
+\documentclass[a4paper,12pt,twoside]{report}
 
 %all the other includes etc. are done in the thesis.sty file.
-\usepackage{thesis}
-\usepackage{amsthm}
+\input{includes}
 %
 % These commands need to be defined in order to produce a correct and personalized document
 %
@@ -108,18 +107,18 @@
 
 \clearemptydoublepage
 
-\chapter{Preliminaries}\label{chapter:preliminaries}
-\input{chapters/preliminaries}
+\chapter{Related Work}\label{chapter:related_work}
+\input{chapters/related_work}
 
 \clearemptydoublepage
 
-\chapter{First Real Chapter}\label{chapter:first_real_chapter}
-\input{chapters/first_real_chapter}
+\chapter{Algorithm recognition}\label{chapter:algorithm_recognition}
+\input{chapters/algorithm_recognition}
 
 \clearemptydoublepage
 
-\chapter{Converting LLVM programs to a canonical form}\label{chapter:second_real_chapter}
-\input{chapters/llvm_canonical}
+\chapter{Evaluation}\label{chapter:evaluation}
+\input{chapters/evaluation}
 
 \clearemptydoublepage
 
