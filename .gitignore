@@ -1,3 +1,4 @@
-literatur/
-material_*/
-proposal/
+build/
+legacy/
+/slic/
+*.bc
