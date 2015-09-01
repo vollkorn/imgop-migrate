@@ -50,9 +50,8 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="optdetect/lib|include|optdetect/include|lib" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="optdetect/include"/>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="optdetect/lib"/>
+						<entry flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="optmigrate/include"/>
+						<entry flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="optmigrate/lib"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
