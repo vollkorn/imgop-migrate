@@ -1,4 +1,9 @@
 build/
 legacy/
 /slic/
+.settings/
+
 *.bc
+.project
+.cproject
+.clang-format
