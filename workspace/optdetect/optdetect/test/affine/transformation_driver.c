@@ -133,7 +133,7 @@ void do_it_hw(u_int8_t **in, u_int8_t **out, int nx, int ny, int channels) {
   // shear
   float SH[3][3] = { { 1, shx, 0 }, { shy, 1, 0 }, { 0, 0, 1 } };
 
-  max_affine_transform_3(in, out, nx, ny, SH);
+  max_affine_transform_3((const u_int8_t **)in, out, nx, ny, SH);
 }
 
 void do_it(u_int8_t **in, u_int8_t **out, int nx, int ny, int channels) {
@@ -164,8 +164,10 @@ void do_it(u_int8_t **in, u_int8_t **out, int nx, int ny, int channels) {
   float SH[3][3] = { { 1, shx, 0 }, { shy, 1, 0 }, { 0, 0, 1 } };
 
   arr_set_value(out, ny, nx, 0);
-  transform(in, out, nx, ny, T);
-
+  if(channels == 1)
+	  transform_2d1(in, out, nx, ny, T);
+  else if(channels == 3)
+	  transform_2d3(in, out, nx, ny, T);
 //  arr_set_value(in, ny, nx, 0);
 //  transform(out, in, nx, ny, S);
 //

@@ -19,9 +19,7 @@
 #include <string>
 
 using namespace llvm;
-using optmig::Expression;
-using optmig::ExpressionNode;
-using optmig::JSONGraphTraits;
+using namespace optmig;
 
 void ExpressionNode::print(raw_ostream &O, bool simple) const {
 
@@ -30,7 +28,7 @@ void ExpressionNode::print(raw_ostream &O, bool simple) const {
     O << *V << "\n";
 
   if (isInductionValue()) {
-    ival.print(O);
+    ival->print(O);
   }
 }
 
@@ -53,39 +51,32 @@ bool ExpressionNode::maps_to(const ExpressionNode &other) const {
   if (v1 == nullptr || v2 == nullptr)
     return false;
 
+  if (v1->getType() != v2->getType())
+    return false;
+
   if (Instruction *inst_1 = dyn_cast<Instruction>(v1))
     if (Instruction *inst_2 = dyn_cast<Instruction>(v2))
-      if (inst_1->getOpcode() == inst_2->getOpcode()) {
-
-        // In case of phi nodes, check if they have equal induction
-        // structure
-        if (isa<PHINode>(inst_1) && isa<PHINode>(inst_2)) {
-          if (ival.valid() && other.ival.valid()) {
-            InductionDescription::MapResult mapresult = ival.map_to(other.ival);
-
-            switch (mapresult) {
-            case InductionDescription::MapResult::IDesc_Map_Ok:
-              return true;
-            case InductionDescription::MapResult::IDesc_Map_Invalid:
-              return false;
-            case InductionDescription::MapResult::IDesc_Map_Resolve_Exit: {
-
-              // TODO: take action here
-              return true;
-            }
-            }
-          }
-        }
+      if (inst_1->getOpcode() == inst_2->getOpcode())
         return true;
-      }
 
-  if (ConstantInt *int_const1 = dyn_cast<ConstantInt>(v1))
-    if (ConstantInt *int_const2 = dyn_cast<ConstantInt>(v2))
-      return true;
+  // Check if constants are the same, except instantiation is set for this node
+  if (ConstantInt *c1 = dyn_cast<ConstantInt>(v1))
+    if (ConstantInt *c2 = dyn_cast<ConstantInt>(v2)) {
+      bool equal = c2->getValue().eq(c1->getValue());
+      if (equal)
+        return true;
+      return false;
+    }
 
-  if (ConstantFP *fp_const1 = dyn_cast<ConstantFP>(v1))
-    if (ConstantFP *fp_const2 = dyn_cast<ConstantFP>(v2))
-      return true;
+  if (ConstantFP *c1 = dyn_cast<ConstantFP>(v1))
+    if (ConstantFP *c2 = dyn_cast<ConstantFP>(v2)) {
+
+      APFloat::cmpResult r = c2->getValueAPF().compare(c1->getValueAPF());
+      if (r == APFloat::cmpEqual)
+        return true;
+
+      return false;
+    }
 
   if (Argument *arg_1 = dyn_cast<Argument>(v1))
     if (Argument *arg_2 = dyn_cast<Argument>(v2))
@@ -97,9 +88,10 @@ bool ExpressionNode::maps_to(const ExpressionNode &other) const {
 void Expression::delete_recursive(ExpressionNode *node) {
 
   std::vector<ExpressionNode *> children = node->Children;
-//  if (User *U = dyn_cast<User>(node->getValue()))
-//    U->dropAllReferences();
-  delete node;
+  //  if (User *U = dyn_cast<User>(node->getValue()))
+  //    U->dropAllReferences();
+//  delete node;
+  //XXX perform proper cleanup!
   for (auto it = children.begin(); it != children.end();) {
     delete_recursive(*it);
 
@@ -176,7 +168,7 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
 
   Value *v = nullptr;
 
-  InductionDescription idesc;
+  InductionDescription *idesc = nullptr;
 
   if (!attributes.is_empty()) {
 
@@ -247,7 +239,7 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
               SEExit = SE->getConstant(ty, ival[2].as_long(), true);
             }
 
-            idesc = InductionDescription(SEStart, SEStep, SEExit);
+            idesc = new InductionDescription(SEStart, SEStep, SEExit);
           }
           v = builder.CreatePHI(ty, 0);
           break;
@@ -310,7 +302,7 @@ ExpressionNode *Expression::deserialize_rec(BasicBlock *BB, Expression *T, json 
     }
   }
   ExpressionNode *N;
-  if (idesc.valid())
+  if (idesc->valid())
     N = new ExpressionNode(T, v, idesc);
   else
     N = new ExpressionNode(T, v);
@@ -523,21 +515,13 @@ Expression *Expression::deserialize(BasicBlock *BB, json &obj, ScalarEvolution *
   return T;
 }
 
-Expression *Expression::calculateBranchExpression(BasicBlock *BB, ScalarEvolution *SE, LoopInfo *LI) {
-  TerminatorInst *term = BB->getTerminator();
-
+Expression *Expression::calculateBranchExpression(TerminatorInst *term, ScalarEvolution *SE, LoopInfo *LI) {
   if (BranchInst *branch = dyn_cast<BranchInst>(term)) {
-
-    if (branch->getNumSuccessors() < 2)
-      return nullptr;
-
     CmpInst *cmp = dyn_cast<CmpInst>(branch->getOperand(0)); // get comparison
-
-    return calculateExpression(BB, cmp, SE, LI);
+    if (cmp)
+      return calculateExpression(cmp, SE, LI);
   }
-  //  else {
-  //    dbgs() << "Cannot compute branch expression from non branch instrucion" << *term << "\n";
-  //  }
+
   return nullptr;
 }
 
@@ -580,14 +564,14 @@ static PHINode *getLoopPhiForCounter(Value *IncV, Loop *L) {
   return nullptr;
 }
 
-static InductionDescription FindPotentialInduction(PHINode *phi, LoopInfo *LI, ScalarEvolution *SE) {
-
+static InductionDescription *FindPotentialInduction(PHINode *phi, LoopInfo *LI, ScalarEvolution *SE) {
   Loop *L = LI->getLoopFor(phi->getParent());
 
   if (!L)
-    return {};
-
+    return nullptr;
   const SCEV *BECount = SE->getBackedgeTakenCount(L);
+  if(BECount->getSCEVType() == SCEVTypes::scCouldNotCompute)
+	  return nullptr;
   uint64_t BCWidth = SE->getTypeSizeInBits(BECount->getType());
 
   assert(L->isLoopSimplifyForm() && "Loop is not in simplified form");
@@ -595,31 +579,30 @@ static InductionDescription FindPotentialInduction(PHINode *phi, LoopInfo *LI, S
   BasicBlock *Latch = L->getLoopLatch();
 
   if (!SE->isSCEVable(phi->getType()))
-    return {};
+    return nullptr;
 
   if (BECount->getType()->isPointerTy() && !phi->getType()->isPointerTy())
-    return {};
+    return nullptr;
 
   const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(SE->getSCEV(phi));
   if (!AR || AR->getLoop() != L || !AR->isAffine())
-    return {};
+    return nullptr;
 
   uint64_t PhiWidth = SE->getTypeSizeInBits(AR->getType());
 
   // Avoid comparing an integer IV against a pointer Limit.
   if (PhiWidth < BCWidth)
-    return {};
+    return nullptr;
 
   const SCEVConstant *Step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(*SE));
   if (!Step || !Step->isOne())
-    return {};
-  ;
+    return nullptr;
 
   int LatchIdx = phi->getBasicBlockIndex(Latch);
   Value *IncV = phi->getIncomingValue(LatchIdx);
 
   if (getLoopPhiForCounter(IncV, L) != phi)
-    return {};
+    return nullptr;
 
   const SCEV *Init = AR->getStart();
 
@@ -628,31 +611,53 @@ static InductionDescription FindPotentialInduction(PHINode *phi, LoopInfo *LI, S
   const SCEV *Bound = SE->getAddExpr(BECount, SE->getConstant(BECount->getType(), 1, false));
 
   if (Init && Step && Bound)
-    return { Init, Step, Bound };
+    return new InductionDescription(Init, Step, Bound);
 
-  return {};
+  return nullptr;
 }
 }
-Expression *Expression::calculateAssignmentExpression(BasicBlock *BB, ScalarEvolution *SE, LoopInfo *LI) {
-  StoreInst *store = nullptr;
+Expression *Expression::calculateAssignmentExpression(StoreInst *store, ScalarEvolution *SE, LoopInfo *LI) {
+  return calculateExpression(store, SE, LI);
+}
+
+std::vector<Expression *> Expression::calculateExpressions(BasicBlock *BB, ScalarEvolution *SE, LoopInfo *LI) {
+
+  std::vector<Expression *> result;
 
   // Calculate assignment expression
   for (auto bb = BB->begin(), be = BB->end(); bb != be; ++bb) {
 
     Instruction *inst = &*bb;
 
+    Expression *E = nullptr;
+
     // Check if instruction is possible left hand side of
-    if (isa<StoreInst>(inst))
-      store = cast<StoreInst>(inst);
+    if (StoreInst *store = dyn_cast<StoreInst>(inst)) {
+      E = calculateAssignmentExpression(store, SE, LI);
+    } else if (TerminatorInst *term = dyn_cast<TerminatorInst>(inst)) {
+      E = calculateBranchExpression(term, SE, LI);
+    } else if (PHINode *phi = dyn_cast<PHINode>(inst)) {
+      E = calculateExpression(phi, SE, LI);
+
+      if(!E)
+    	  continue;
+      ExpressionNode *node = E->getNodeFor(phi);
+
+      const InductionDescription *desc = node->getInductionDescription();
+      if (!desc) {
+        delete E;
+        E = nullptr;
+      }
+    }
+
+    if (E)
+      result.push_back(E);
   }
 
-  if (!store)
-    return nullptr;
-
-  return calculateExpression(BB, store, SE, LI);
+  return result;
 }
 
-Expression *Expression::calculateExpression(BasicBlock *BB, Instruction *inst, ScalarEvolution *SE, LoopInfo *LI) {
+Expression *Expression::calculateExpression(Instruction *inst, ScalarEvolution *SE, LoopInfo *LI) {
 
   Expression *T = new Expression();
 
@@ -679,15 +684,22 @@ Expression *Expression::calculateExpression(BasicBlock *BB, Instruction *inst, S
       Instruction *instr = cast<Instruction>(val);
 
       if (PHINode *phi = dyn_cast<PHINode>(instr)) {
+        InductionDescription *idesc = FindPotentialInduction(phi, LI, SE);
+        node = new ExpressionNode(T, phi, idesc);
+        if (idesc) {
 
-        Loop *L = LI->getLoopFor(phi->getParent());
+          // resolve all unknown values
+          SmallVector<Value *, 8> unknowns;
+          SCEVTraversalCollectUnknows visitor(SE, unknowns);
+          visitAll(idesc->getInit(), visitor);
+          visitAll(idesc->getExit(), visitor);
 
-        InductionDescription idesc = FindPotentialInduction(phi, LI, SE);
-        if (idesc.valid())
-          node = new ExpressionNode(T, phi, idesc);
-        else
-          node = new ExpressionNode(T, phi);
-
+          for (Value *v : unknowns) {
+            ExpressionNode *n = new ExpressionNode(node->Parent, v);
+            node->Parent->add_node(n);
+            node->add_child(n);
+          }
+        }
       } else if (isa<CallInst>(instr)) {
         errs() << "Call functions not supported, please inline first!\n";
         delete T;
@@ -798,10 +810,10 @@ std::string JSONGraphTraits<const Expression *>::getNodeAttributes(const Express
     }
 
     if (N.isInductionValue()) {
-      InductionDescription idesc = N.getInductionDescription();
-      const SCEVConstant *init = dyn_cast<SCEVConstant>(idesc.getInit());
-      const SCEVConstant *step = dyn_cast<SCEVConstant>(idesc.getStep());
-      const SCEV *exit = idesc.getExit();
+      const InductionDescription *idesc = N.getInductionDescription();
+      const SCEVConstant *init = dyn_cast<SCEVConstant>(idesc->getInit());
+      const SCEVConstant *step = dyn_cast<SCEVConstant>(idesc->getStep());
+      const SCEV *exit = idesc->getExit();
 
       O << ", ";
       O << "\"i_val\" : "

@@ -11,10 +11,7 @@ using namespace llvm;
 
 using jsoncons::json;
 
-using optmig::Pattern;
-using optmig::PatternDB;
-using optmig::MatchResult;
-
+using namespace optmig;
 // trim from start
 static inline std::string &ltrim(std::string &s) {
   s.erase(s.begin(), std::find_if(s.begin(), s.end(), std::not1(std::ptr_fun<int, int>(std::isspace))));
@@ -39,7 +36,7 @@ static inline std::string normalize_value_name(std::string name) {
   return name;
 }
 //, std::map<Value *, uint64_t> &binding
-Function *create_hw_interface(Function *pattern, const json &hwiface, std::map<Value *, uint64_t> &binding) {
+Function *create_hw_interface(Module &M, Function *pattern, const json &hwiface, std::map<Value *, uint64_t> &binding) {
   json hwiface_binding = hwiface["binding"];
   std::string hwiface_name = hwiface["name"].as_string();
 
@@ -61,12 +58,12 @@ Function *create_hw_interface(Function *pattern, const json &hwiface, std::map<V
   }
 
   FunctionType *fnty = FunctionType::get(FunctionType::getInt1Ty(context), ArgTy, false);
-  Function *F = Function::Create(fnty, Function::ExternalLinkage, "hwiface_" + hwiface_name);
+  Function *F = Function::Create(fnty, Function::ExternalLinkage, hwiface_name, &M);
 
   return F;
 }
 
-Pattern *Pattern::create_from_obj(LLVMContext &context, const json &pattern) {
+Pattern *Pattern::create_from_obj(Module &M, const json &pattern) {
 
   json attributes = pattern["attributes"];
 
@@ -76,127 +73,22 @@ Pattern *Pattern::create_from_obj(LLVMContext &context, const json &pattern) {
 
   dbgs() << "Loading pattern \"" << name << "\" into database\n";
 
-  const AbstractCFG *H = AbstractCFG::deserialize(context, pattern);
+  const AbstractCFG *H = AbstractCFG::deserialize(M.getContext(), pattern);
 
   Function *PatternFn = H->get_function();
 
   std::map<Value *, uint64_t> binding;
-  Function *HwFn = create_hw_interface(PatternFn, hwiface, binding);
+  Function *HwFn = create_hw_interface(M, PatternFn, hwiface, binding);
 
   Pattern *p;
   if (H && !name.empty()) {
     p = new Pattern(name, HwFn, H, binding);
-    p->view();
+//    p->view();
   }
 
   return p;
 }
 
-bool MatchResult::resolve_binding(std::vector<Value *> &value_binding) {
-
-  std::map<Value *, uint64_t> &binding = P->get_binding();
-
-  value_binding.resize(binding.size());
-
-  unsigned num_bound = 0;
-  // rhs value from pattern
-  // lhs value from candidate
-  for (auto it_binding = binding.begin(), end_binding = binding.end(); it_binding != end_binding; ++it_binding) {
-    Value *rhs = (*it_binding).first;
-    u_int8_t pos = (*it_binding).second;
-    for (auto it = ExpressionMapping.begin(), end = ExpressionMapping.end(); it != end; ++it) {
-      Expression *EP = (*it).first;
-      Value *cval = nullptr;
-
-      GraphMatcher<Expression>::AssignmentT &assignment = (*it).second;
-
-      auto i = std::find_if(assignment.begin(), assignment.end(),
-                            [&rhs](GraphMatcher<Expression>::AssignT a) { return a.first->getValue() == rhs; });
-
-      if (i != assignment.end()) {
-        // get assigned candidate node
-        const ExpressionNode *cnode = assignment[(*i).first];
-        cval = cnode->getValue();
-      }
-
-      if (cval) {
-        cval->dump();
-        value_binding[pos] = cval;
-        num_bound++;
-        break;
-      }
-    }
-  }
-  if (binding.size() != num_bound) {
-    errs() << "Arguments not bound: " << (binding.size() - num_bound) << "\n";
-    return false;
-  }
-
-
-  return true;
-}
-
-bool MatchResult::try_offload() {
-
-  BasicBlock *Entry, *Exit;
-
-  // Lambda to get BB from candidate CFG
-  auto get_bb = [&](AbstractCFGNode::Label label)->BasicBlock * {
-    auto it = std::find_if(
-        CFGMapping->begin(), CFGMapping->end(),
-        [&label](std::pair<const AbstractCFGNode *, const AbstractCFGNode *> n) { return n.first->instanceof(label); });
-
-    if (it != CFGMapping->end())
-      return (*it).second->getBasicBlock();
-
-    return nullptr;
-  };
-
-  Entry = get_bb(AbstractCFGNode::ENTRY);
-  Exit = get_bb(AbstractCFGNode::EXIT);
-
-  if (!Entry && !Exit)
-    return false;
-
-  LLVMContext &context = Entry->getContext();
-
-  std::vector<Value*> binding;
-  resolve_binding(binding);
-
-  Module *M = Entry->getParent()->getParent();
-
-  BasicBlock *BB = BasicBlock::Create(context, "acc_offload", Entry->getParent(), Entry);
-
-  // Alter control flow such that each predecessor of the matched control flow
-  // goes through the accelerator BB
-  for (pred_iterator it = pred_begin(Entry), end = pred_end(Entry); it != end; ++it) {
-    BasicBlock *pred = *it;
-
-    TerminatorInst *term = pred->getTerminator();
-
-    if (BranchInst *br = dyn_cast<BranchInst>(term)) {
-      for (int index = 0; index < br->getNumSuccessors(); ++index)
-        if (br->getSuccessor(index) == Entry) {
-          br->setSuccessor(index, BB);
-          break;
-        }
-
-    } else
-      errs() << "Dont know how to handle " << *term << "\n";
-  }
-  // Create prototype of external defined hw accelerator function
-  IRBuilder<> builder(BB);
-  Function *F = P->get_function();
-
-  Function *proto = P->get_hwiface();
-
-  M->getFunctionList().push_back(proto);
-
-  CallInst *hwcall = builder.CreateCall(proto, binding);
-  builder.CreateCondBr(hwcall, Entry, Exit);
-
-  return true;
-}
 
 bool PatternDB::CFGNarrow(const AbstractCFGNode *n_H, const AbstractCFGNode *n_G) {
   const std::vector<Expression *> expr_of_H = n_H->get_expressions();
@@ -233,77 +125,35 @@ bool PatternDB::CFGNarrow(const AbstractCFGNode *n_H, const AbstractCFGNode *n_G
   return true;
 }
 
-std::vector<MatchResult> PatternDB::find_matchings(const AbstractCFG *G, bool show_graphs) {
+std::vector<MatchResult> PatternDB::find_matchings(const AbstractCFG *G) {
 
   std::vector<MatchResult> matchings;
 
+  if(!init)
+	  return matchings;
+
   // look for each pattern if there is a match in the candidate CFG
   for (Pattern *p : db) {
+	  PatternMatcher matcher(G, p, show_graphs, match_cfg_only);
 
-    std::vector<GraphMatcher<AbstractCFG>::AssignmentT *> assignments;
-
-    const AbstractCFG *H = p->getCFG();
-
-    // Forward to next pattern if number of nodes in H is greater
-    // than number of node in G -> no isomorphism possible
-    if (std::distance(G->nodes_begin(), G->nodes_end()) < std::distance(H->nodes_begin(), H->nodes_end()))
-      continue;
-
-    if (!GraphMatcher<AbstractCFG>::find_isomorphisms(G, H, assignments, &PatternDB::CFGNarrow))
-      continue;
-
-    // Sort out invalid matchings
-    for (auto it = assignments.begin(); it != assignments.end();) {
-
-      GraphMatcher<AbstractCFG>::AssignmentT *A = *it;
-      std::map<Expression *, GraphMatcher<Expression>::AssignmentT> ExpressionMappings;
-      if (show_graphs)
-        GraphMatcher<AbstractCFG>::show_matching_graph(G, H, A);
-      bool assignment_valid = true;
-      // For each assignment in the CFG try to match the expressions
-      // of each block of the pattern to a block of the candidate
-      // If no mapping of the pattern expressions can be established
-      // the assignment is invalid
-      for (auto it = A->begin(), end = A->end(); it != end; ++it) {
-
-        const std::vector<Expression *> &PatternExpressions = ((*it).first)->get_expressions();
-        const std::vector<Expression *> &CandidateExpressions = ((*it).second)->get_expressions();
-
-        for (Expression *EP : PatternExpressions) {
-          GraphMatcher<Expression>::AssignmentT &mapping = ExpressionMappings[EP];
-          for (Expression *EC : CandidateExpressions)
-            if (GraphMatcher<Expression>::match_binary_trees(EP, EC, mapping))
-              break;
-            else
-              mapping.clear();
-        }
-        // Check if the assignment is valid
-        std::for_each(PatternExpressions.begin(), PatternExpressions.end(), [&](Expression *EP) {
-
-          auto it = ExpressionMappings.find(EP);
-          assignment_valid &= !((*it).second.empty());
-        });
-      }
-
-      if (!assignment_valid) {
-        it = assignments.erase(it);
-        delete A;
-      } else {
-        ++it;
-
-        GraphMatcher<AbstractCFG>::print_assignment(dbgs(), A);
-        matchings.push_back({ p, A, ExpressionMappings });
-      }
-    }
+	  if(matcher.match()){
+		  std::vector<MatchResult>& result = matcher.get_matching_result();
+		  matchings.insert(matchings.end(), result.begin(), result.end());
+	  }
   }
   return matchings;
 }
 
-PatternDB &PatternDB::load(LLVMContext &context, const std::string &filename) {
+PatternDB &PatternDB::load(Module &M, const std::string &filename) {
   static PatternDB instance;
 
   if (instance.init)
     return instance;
+
+  if(!sys::fs::exists(filename)){
+	  errs() << "File does not exist: " << filename << "\n";
+	  return instance;
+  }
 
   json json_db = json::parse_file(filename);
   json json_db_obj = json_db["db"];
@@ -311,7 +161,7 @@ PatternDB &PatternDB::load(LLVMContext &context, const std::string &filename) {
 
     json pattern = (*it);
 
-    Pattern *p = Pattern::create_from_obj(getGlobalContext(), pattern);
+    Pattern *p = Pattern::create_from_obj(M, pattern);
 
     if (p)
       instance.db.push_back(p);

@@ -8,6 +8,7 @@
 #ifndef SCFG_HEADER_H_
 #define SCFG_HEADER_H_
 
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 
 #include "llvm/Support/raw_ostream.h"
@@ -99,7 +100,7 @@ public:
 
   AbstractCFG *get_parent() { return Parent; }
 
-  void add_expression(std::vector<Expression *> &Expressions) {
+  void add_expression(std::vector<Expression *> Expressions) {
 
     for (Expression *E : Expressions)
       add_expression(E);
@@ -126,7 +127,11 @@ private:
   const std::vector<std::string> str_labels = { "entry",    "exit",      "loop_header", "loop_pre_header",
                                                 "loop_inc", "loop_exit", "loop_body",   "unknown" };
 
-  void add_child(AbstractCFGNode *node) { Successors.push_back(node); }
+  void add_child(AbstractCFGNode *node) {
+
+    if (node != nullptr)
+      Successors.push_back(node);
+  }
 
   void set_parent(AbstractCFG *Parent) { this->Parent = Parent; }
 };
@@ -171,7 +176,7 @@ private:
 
   Function *F;
 
-  static const AbstractCFG *_deserialize(LLVMContext& context, const json &Pattern);
+  static const AbstractCFG *_deserialize(LLVMContext &context, const json &Pattern);
 
 public:
   virtual ~AbstractCFG() {
@@ -191,9 +196,7 @@ public:
 
   Function *get_function() const { return F; }
 
-  static const AbstractCFG *deserialize(LLVMContext& context, const json &obj) {
-    return _deserialize(context, obj);
-  }
+  static const AbstractCFG *deserialize(LLVMContext &context, const json &obj) { return _deserialize(context, obj); }
   static void serialize(const AbstractCFG *G, const std::string &name) { WriteJSONGraph(G, name); }
 };
 }
@@ -346,15 +349,18 @@ template <> struct JSONGraphTraits<const AbstractCFG *> : public DefaultJSONGrap
     O << "\"labels\": ";
 
     ArrayRef<AbstractCFGNode::Label> label = N.get_labels();
+    if (label.empty()) {
+    	O << "[],";
+    } else{
 
-    std::string label_string = "[";
-    std::for_each(label.begin(), label.end(),
-                  [&label_string](AbstractCFGNode::Label label) { label_string += std::to_string(label) + ","; });
-    label_string.erase(label_string.end() - 1, label_string.end());
-    label_string += "]";
+      std::string label_string = "[";
+      std::for_each(label.begin(), label.end(),
+                    [&label_string](AbstractCFGNode::Label label) { label_string += std::to_string(label) + ","; });
+      label_string.erase(label_string.end() - 1, label_string.end());
+      label_string += "]";
+      O << label_string << ",";
 
-    O << label_string << ",";
-
+    }
     const BasicBlock *BB = N.getBasicBlock();
 
     O << "\"name\": \"" << BB->getName() << "\",";

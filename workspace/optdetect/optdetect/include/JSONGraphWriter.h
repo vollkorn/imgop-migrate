@@ -15,6 +15,8 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 
+#include "llvm/Support/Debug.h"
+
 #include "jsoncons/json.hpp"
 
 #include <sstream>
@@ -137,7 +139,9 @@ private:
       node["_id"] = JTraits.getUniqueNodeID(*Node);
 
       // Node attributes
-      json attributes = json::parse_string(JTraits.getNodeAttributes(*Node, *G));
+      std::string attrstr = JTraits.getNodeAttributes(*Node, *G);
+      dbgs() << attrstr << "\n";
+      json attributes = json::parse_string(attrstr);
 
       node["attributes"] = attributes;
 

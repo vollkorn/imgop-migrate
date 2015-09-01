@@ -90,6 +90,37 @@ void convolve_2d1_inline_2darr(const u_int8_t **in, u_int8_t **out, const float 
     }
 }
 
+void convolve_2d1_inline_2darr_sym(const u_int8_t **in, u_int8_t **out, const float *kernel, const int kn,
+                                   const int dim_x, const int dim_y, float scale) {
+  const int khalf = kn / 2;
+  int q0[kn][kn];
+
+  for (int y = khalf; y < dim_y - khalf; y++) // iteration over image pixels
+    for (int x = khalf; x < dim_x - khalf; x++) {
+      float pixel = 0.0;
+      int c = 0;
+
+      for (int j = 0; j < kn; j++)
+        for (int i = 0; i < kn; i++)
+          q0[j][i] = in[y + j - khalf][x + i - khalf];
+
+      // actual filter operation
+      for (int j = 1; j < khalf + 1; j++) {
+        for (int i = 0; i < kn; i++) {
+          q0[khalf - j][i] = q0[khalf - j][i] + q0[khalf - j][i];
+        }
+      }
+
+      for (int j = 0; j < khalf + 1; j++) {
+        for (int i = 1; i < khalf + 1; i++) {
+          q0[j][khalf + i] = q0[j][khalf + i] + q0[j][khalf - i];
+          pixel += q0[j][khalf + i] * kernel[j * kn + khalf + i - 1];
+        }
+      }
+      out[y][x] = (u_int8_t)(pixel / scale);
+    }
+}
+
 //===----------------------------------------------------------------------===//
 
 //=== Convolution 2D on arrays with idirectional layout -------------------===//
@@ -97,8 +128,8 @@ void convolve_2d1_inline_2darr(const u_int8_t **in, u_int8_t **out, const float 
 //  | r | g | b |
 //===----------------------------------------------------------------------===//
 
-void convolve_2d3_inline_2darr(const u_int8_t **in, u_int8_t **out, const float *kernel, const int kn,
-                               const int dim_x, const int dim_y, float scale) {
+void convolve_2d3_inline_2darr(const u_int8_t **in, u_int8_t **out, const float *kernel, const int kn, const int dim_x,
+                               const int dim_y, float scale) {
   const int khalf = kn / 2;
 
   for (int y = khalf; y < dim_y - khalf; y++) // iteration over image pixels
@@ -110,7 +141,7 @@ void convolve_2d3_inline_2darr(const u_int8_t **in, u_int8_t **out, const float 
       for (int j = -khalf; j <= khalf; j++) {
         for (int i = -khalf; i <= khalf; i++) {
           float kernel_val = kernel[c++];
-          u_int32_t x_offset = 3*(x+i);
+          u_int32_t x_offset = 3 * (x + i);
           u_int32_t r_ = in[y + j][x_offset];
           u_int32_t g_ = in[y + j][x_offset + 1];
           u_int32_t b_ = in[y + j][x_offset + 2];
@@ -125,8 +156,12 @@ void convolve_2d3_inline_2darr(const u_int8_t **in, u_int8_t **out, const float 
       g = g / scale;
       b = b / scale;
 
-      out[y][x*3 + 0] = min(  max(((int)r), 0)  , 255);
-      out[y][x*3 + 1] = min(  max(((int)g), 0)  , 255);
-      out[y][x*3 + 2] = min(  max(((int)b), 0)  , 255);
+      out[y][x * 3 + 0] = min(max(((int)r), 0), 255);
+      out[y][x * 3 + 1] = min(max(((int)g), 0), 255);
+      out[y][x * 3 + 2] = min(max(((int)b), 0), 255);
     }
 }
+
+//===----------------------------------------------------------------------===//
+//===  -------     Random code to test pattern recognition            -----===//
+

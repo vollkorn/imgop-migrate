@@ -108,22 +108,30 @@ def beautify(filename):
     (db, data) = get_db(filename)
     write_db(db, filename, False)
 
-def add_to_db(dbfilename, patternfilename):
-    print ("Merging pattern into db...")
+def add_to_db(dbfilename, patternfilename, preserve_hwiface = True ):
+    print "Merging pattern into db: " + patternfilename 
 
     (db, data) = get_db(dbfilename)
     patternobj = get_pattern(patternfilename)
     replace = False
+    dbpattern = None
     for pattern in data:
         if(pattern['name'] == patternobj['name']):
             print("Pattern '" +  patternobj['name'] + "' already exists!")
+            dbpattern = pattern
             replace = query_yes_no("Replace pattern?")
             if not replace:
                 return
     
     if replace:
+        hwfaceobj = None
+        if preserve_hwiface:
+            hwifaceobj = dbpattern['attributes']['hw_interface']
+            patternobj['attributes']['hw_interface'] = hwifaceobj
+            #if not hwifaceobj is None:
+            #json.dumps(hwifaceobj, sort_keys=True, indent=4, separators=(',', ': '))
         det = lambda patterobj, p: (patternobj['name'] == p['name'])
-        dbobj[:] = [p for p in data if not det]
+        data[:] = [p for p in data if not det]
 
     data.append(patternobj)
     write_db(db, dbfilename)
@@ -134,7 +142,7 @@ def main():
     parser = argparse.ArgumentParser(description='Query/manipulate pattern database.')
     parser.add_argument('action', choices=['beautify','compress', 'new', 'add', 'list', 'rm'])
     parser.add_argument('dbfilename', type=str)
-    parser.add_argument('patternfilename', nargs='?', type=str)
+    parser.add_argument('patternfilename', nargs='*', type=str)
     
     args = None
     try:
@@ -148,7 +156,9 @@ def main():
     elif args.action == 'rm':
         rm_from_db(args.dbfilename)
     elif args.action == 'add':
-        add_to_db(args.dbfilename, args.patternfilename)
+    	patternfilenames = args.patternfilename    	
+    	for f in patternfilenames:    	
+        	add_to_db(args.dbfilename, f)
     elif args.action == 'new':
         new_db(args.dbfilename)
     elif args.action == 'compress':

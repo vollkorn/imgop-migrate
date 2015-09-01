@@ -10,7 +10,7 @@
 
 #include <sys/types.h>
 
-#define SLIC_REPO "/home/lfunke/overlays/"
+#define SLIC_REPO "/home/lfunke/overlays"
 
 #define ALLOW_HW "ALLOW_HW_MIGRATE"
 
@@ -25,12 +25,17 @@
 
 #define MEASURE_EXECUTIONTIME
 
+#define INCLUDE_OFFLOAD_DECISION
+
 #define OFFLOAD()                                                                                                      \
   u_int8_t do_offload = get_allow_hw_acceleration();                                                                   \
   if (!do_offload)                                                                                                     \
     return 1;
 
-#define ALWAYS_OFFLOAD
+#define MAX_SIZE_X (4096)
+#define MAX_SIZE_Y (4096)
+
+//#define ALWAYS_OFFLOAD
 
 //===--------------------       Affine transform        -------------------===//
 //===----------------------------------------------------------------------===//
@@ -42,7 +47,7 @@
 /// @param channel	number of channels (1 = grayscale, 3 = rgb, 4 = rgba)
 /// @param M		transformation matrix ( 3 x 3 )
 u_int8_t max_affine_transform_base(const u_int8_t *img_in, u_int8_t *img_out, u_int32_t size_x, u_int32_t size_y,
-                                   float *M);
+                                   float *M, int channel);
 
 //===--------------------       Wrapper functions       -------------------===//
 //===----------------------------------------------------------------------===//

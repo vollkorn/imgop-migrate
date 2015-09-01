@@ -10,11 +10,20 @@
 
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/TimeValue.h"
 
 #include <vector>
 #include <map>
 #include <unordered_map>
 #include <functional>
+
+//#define PROFILE
+
+#ifdef PROFILE
+
+#include <gperftools/profiler.h>
+
+#endif
 
 //------------------------------------------------------------------
 //------------------------------------------------------------------
@@ -32,8 +41,8 @@ public:
 
   typedef typename std::pair<NodeType *, NodeType *> AssignT;
   typedef typename std::vector<NodeType *> CandidatesT;
-  typedef typename std::map<NodeType *, NodeType *> AssignmentT;
-  typedef typename std::map<NodeType *, CandidatesT> PAssignmentT;
+  typedef typename std::unordered_map<NodeType *, NodeType *> AssignmentT;
+  typedef typename std::unordered_map<NodeType *, CandidatesT> PAssignmentT;
 
   static bool match_binary_trees(const GraphT *T1, const GraphT *T2, AssignmentT &mapping) {
 
@@ -51,15 +60,22 @@ public:
   static bool find_isomorphisms(const GraphT *G, const GraphT *H, std::vector<AssignmentT *> &assignments,
                                 std::function<bool(const NodeType *, const NodeType *)> narrowfn = [](
                                     const NodeType *n1, const NodeType *n2) { return true; }) {
+
+#ifdef PROFILE
+    ProfilerStart(__FUNCTION__);
+#endif
+
     raw_ostream &O = dbgs();
 
-    O << "Calculating graph isomorphism...";
+    O << "Calculating graph isomorphism...\n";
+    O << "#G: " << std::distance(GTraits::nodes_begin(G), GTraits::nodes_end(G)) << "\n";
+    O << "#H: " << std::distance(GTraits::nodes_begin(H), GTraits::nodes_end(H)) << "\n";
+
+    sys::TimeValue start = sys::TimeValue::now();
 
     PAssignmentT possible_assignments;
 
     calculate_possible_assignments(G, H, possible_assignments, narrowfn);
-
-    // Sort nodes of pattern graph in level order
 
     // print_possible_assignment(dbgs(), possible_assignments);
     bool found_assignment = true;
@@ -91,13 +107,21 @@ public:
         delete A;
     }
 
+    sys::TimeValue stop = sys::TimeValue::now();
+
+    O << "Done. Took " << (stop - start).milliseconds() << " ms\n";
+
+#ifdef PROFILE
+    ProfilerStop();
+#endif
+
     if (!assignments.empty()) {
 
-      O << "done. Found isomorphism!\n";
+      O << "Found isomorphism!\n";
       return true;
     }
 
-    O << "done. Found NO isomorphism!\n";
+    O << "Found NO isomorphism!\n";
     return false;
   }
 
@@ -229,8 +253,9 @@ private:
       CandidatesT &candidates = possible_assignments[Y];
       if (candidates.empty())
         return false;
-      for (NodeType *X : candidates) {
-
+      auto itc = candidates.begin();
+      while(itc != candidates.end()) {
+        NodeType *X = (*itc);
         // create new assignment
         auto iter = assignment.insert(std::make_pair(Y, X)).first;
         // remove X from all possible assignments except
@@ -241,6 +266,9 @@ private:
           return true;
 
         assignment.erase(iter);
+
+        itc = candidates.erase(itc);
+        refine_assignments(possible_assignments);
       }
 
       // pick an assignment and remove all but one from this assignment
@@ -249,9 +277,9 @@ private:
     return false;
   }
 
-  static bool update_possible_assignment(const NodeType *Y, const NodeType *X, PAssignmentT &possible_assignment) {
+  static bool update_possible_assignment(const NodeType *Y, const NodeType *X, PAssignmentT &P) {
 
-    for (auto it = possible_assignment.begin(), end = possible_assignment.end(); it != end; ++it) {
+    for (auto it = P.begin(), end = P.end(); it != end; ++it) {
 
       NodeType *const N = (*it).first;
       CandidatesT &candidates = (*it).second;

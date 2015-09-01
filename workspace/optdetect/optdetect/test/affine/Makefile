@@ -39,9 +39,9 @@ a.out:
 			  ../../hwiface/max_hw_iface.bc \
 			  ../testdata/access/jpeg.bc -S -o a.ll
 			  
-	llc a.ll -o a.s
-	gcc a.s -o a.out -ldl -ljpeg
-	cp a.s $(MAXREMOTE)
+	#llc a.ll -o a.s
+	#gcc a.s -o a.out -ldl -ljpeg
+	#cp a.s $(MAXREMOTE)
 	
 clean:
 	rm -f *.o *.ll *.s a.out 

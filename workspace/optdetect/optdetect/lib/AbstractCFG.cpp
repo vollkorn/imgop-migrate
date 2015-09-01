@@ -25,9 +25,7 @@
 
 #include "AbstractCFG.h"
 
-using optmig::AbstractCFG;
-using optmig::AbstractCFGNode;
-
+using namespace optmig;
 
 void AbstractCFGNode::print(raw_ostream &O) const {
 
@@ -162,7 +160,6 @@ const AbstractCFG *AbstractCFG::_deserialize(LLVMContext &context, const json &P
   assert(M->getFunctionList().size() == 1 && "Module contains more than one pattern");
 
   Function& F = M->getFunctionList().back();
-  F.dump();
   if(verifyFunction(F, &errs()))
 	  return nullptr;
 
@@ -181,75 +178,13 @@ const AbstractCFG *AbstractCFG::_deserialize(LLVMContext &context, const json &P
   return H;
 }
 
-// json graph = Pattern["graph"];
-// json nodes = graph[0]["nodes"];
-// json edges = graph[1]["edges"];
-//
-// std::map<u_int64_t, ExpressionNode*> lazyReference;
-//
-// for (auto it = nodes.begin_elements(); it != nodes.end_elements(); ++it) {
-//  unsigned _id = (*it)["_id"].as_uint();
-//
-//  json attributes = (*it)["attributes"];
-//  AbstractCFGNode *N = nullptr;
-//  Expression *AT = nullptr, *BT = nullptr;
-//  BasicBlock *BB = BasicBlock::Create(F->getContext(), "blk_" + utostr_32(_id), F, nullptr);
-//  std::vector<AbstractCFGNode::Label> labels;
-//  std::vector<Expression *> expressions;
-//  if (!attributes.is_empty()) {
-//
-//    if (attributes.has_member("labels")) {
-//      std::vector<unsigned> parsed_labels = attributes["labels"].as_vector<unsigned>();
-//
-//      std::for_each(parsed_labels.begin(), parsed_labels.end(),
-//                    [&](unsigned lbl) { labels.push_back(static_cast<AbstractCFGNode::Label>(lbl)); });
-//    }
-//
-//    if (attributes.has_member("expressions")) {
-//      json e = attributes["expressions"];
-//      for (auto eit = e.begin_elements(), eend = e.end_elements(); eit != eend; ++eit) {
-//        Expression* expression = Expression::deserialize(BB, *eit, SE, lazyReference);
-//        if (expression != nullptr)
-//          expressions.push_back(expression);
-//      }
-//    }
-//  }
-//
-//  N = new AbstractCFGNode(labels, BB);
-//  if (N) {
-//    N->add_expression(expressions);
-//    id_node_map.insert(std::make_pair(_id, N));
-//    G->add_node(N);
-//  }
-//}
-//
-// for(auto it = lazyReference.begin(), end = lazyReference.end(); it != end; ++it){
-//
-//	  u_int64_t id = (*it).first;
-//	  ExpressionNode* n = (*it).second;
-//
-//	  n->Reference = id_node_map[id];
-//
-//}
-// for (auto it = edges.begin_elements(); it != edges.end_elements(); ++it) {
-//
-//  unsigned src_id = (*it)["src"].as_uint();
-//  unsigned dst_id = (*it)["dst"].as_uint();
-//  AbstractCFGNode *&src = id_node_map[src_id];
-//  AbstractCFGNode *&dst = id_node_map[dst_id];
-//
-//  src->add_child(dst);
-//}
-
 bool AbstractCFG::recursiveTraverse(AbstractCFG *T, BasicBlock *BB, AbstractCFGNode *parent,
                                     std::set<BasicBlock *> &visited, LoopInfo *LI, ScalarEvolution *SE) {
   static unsigned UID = 0;
-  auto col = visited.insert(BB);
-
   LLVMContext &context = BB->getContext();
 
-  if (!col.second) {
-    parent->add_child(T->get_node(BB));
+  if (!visited.insert(BB).second) {
+    parent->add_child( T->get_node(BB) );
     return true;
   }
 
@@ -294,9 +229,8 @@ bool AbstractCFG::recursiveTraverse(AbstractCFG *T, BasicBlock *BB, AbstractCFGN
     Labels.push_back(AbstractCFGNode::EXIT);
 
   AbstractCFGNode *node = new AbstractCFGNode(Labels, BB);
-
-  node->add_expression(Expression::calculateAssignmentExpression(BB, SE, LI));
-  node->add_expression(Expression::calculateBranchExpression(BB, SE, LI));
+  std::vector<Expression*> expressions = Expression::calculateExpressions(BB, SE, LI);
+  node->add_expression(expressions);
 
   T->add_node(node);
   if (parent)

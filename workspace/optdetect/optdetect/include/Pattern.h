@@ -14,8 +14,7 @@
 #include "llvm/Analysis/RegionInfo.h"
 
 #include "AbstractCFG.h"
-#include "Expression.h"
-#include "GraphMatching.h"
+#include "PatternMatcher.h"
 
 #include "jsoncons/json.hpp"
 
@@ -31,9 +30,7 @@ class Pattern : public ilist_node<Pattern> {
 
 private:
   Pattern(const std::string name, Function *AccFn, const AbstractCFG *cfg, std::map<Value *, uint64_t> binding)
-	: name(name), AcceleratorFcn(AccFn), H(cfg), binding(binding)
-	{}
-
+      : name(name), AcceleratorFcn(AccFn), H(cfg), binding(binding) {}
 
   Function *AcceleratorFcn;
   std::map<Value *, uint64_t> binding;
@@ -42,53 +39,27 @@ private:
   std::string name;
 
 public:
-  static Pattern *create_from_file(LLVMContext &context, const std::string &filename);
-  static Pattern *create_from_obj(LLVMContext &context, const json &pattern);
+
+  static Pattern *create_from_obj(Module &M, const json &pattern);
 
   const AbstractCFG *getCFG() { return H; }
 
-  Function* get_function(){ return getCFG()->get_function(); }
+  Function *get_function() { return getCFG()->get_function(); }
 
-  Function* get_hwiface(){ return AcceleratorFcn; }
+  Function *get_hwiface() { return AcceleratorFcn; }
 
-  std::map<Value*, u_int64_t>& get_binding(){ return binding;}
+  std::map<Value *, u_int64_t> &get_binding() { return binding; }
 
   void view() {
 
-    llvm::ViewGraph<const AbstractCFG *>(getCFG(), "foo", false, "Pattern control flow graph of " + get_function()->getName());
+    llvm::ViewGraph<const AbstractCFG *>(getCFG(), "foo", false,
+                                         "Pattern control flow graph of " + get_function()->getName());
   }
 
-  virtual ~Pattern() {
-
-	  delete H;
-  }
+  virtual ~Pattern() { delete H; }
 };
 }
 
-namespace optmig {
-class MatchResult {
-
-private:
-  std::map<Expression *, GraphMatcher<Expression>::AssignmentT> ExpressionMapping;
-  GraphMatcher<AbstractCFG>::AssignmentT *CFGMapping;
-
-  Pattern* P;
-
-public:
-  MatchResult(Pattern* P, GraphMatcher<AbstractCFG>::AssignmentT *CFGMapping,
-              std::map<Expression *, GraphMatcher<Expression>::AssignmentT> ExpressionMapping)
-      : P(P), CFGMapping(CFGMapping), ExpressionMapping(ExpressionMapping) {}
-  virtual ~MatchResult() {}
-
-  bool try_offload();
-
-
-private:
-
- bool resolve_binding(std::vector<Value*> &value_binding);
-
-};
-}
 namespace optmig {
 
 class PatternDB {
@@ -96,13 +67,20 @@ class PatternDB {
   friend class Pattern;
 
 public:
-  static PatternDB &load(LLVMContext &context, const std::string &filename);
+  static PatternDB &load(Module &M, const std::string &filename);
 
-  std::vector<MatchResult> find_matchings(const AbstractCFG *G, bool show_graphs);
+  std::vector<MatchResult> find_matchings(const AbstractCFG *G);
 
-  static bool CFGNarrow(const AbstractCFGNode * n_H, const AbstractCFGNode * n_G);
+  static bool CFGNarrow(const AbstractCFGNode *n_H, const AbstractCFGNode *n_G);
 
+
+  void set_match_cfg_only(bool val){ match_cfg_only = val;}
+  void set_show_graphs(bool val){ show_graphs = val;}
 private:
+
+  bool match_cfg_only = false;
+  bool show_graphs = false;
+
   PatternDB() {}
   virtual ~PatternDB() {
 

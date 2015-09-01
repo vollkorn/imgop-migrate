@@ -1,0 +1,266 @@
+{
+	"attributes":{
+		"datalayout":"e-m:e-i64:64-f80:128-n8:16:32:64-S128",
+		"hw_interface":{
+			"binding":[
+				[
+					"%in",
+					0
+				],
+				[
+					"%out",
+					1
+				],
+				[
+					"%kernel",
+					2
+				],
+				[
+					"%kn",
+					3
+				],
+				[
+					"%size_x",
+					4
+				],
+				[
+					"%size_y",
+					5
+				],
+				[
+					"%scale",
+					6
+				],
+				[
+					"%x",
+					4
+				],
+				[
+					"%y",
+					7
+				]
+			],
+			"name":"max_convolve_1"
+		},
+		"interface":"define void @filter_kernel_2d1_1darr(i8* %in, i8* %out, float* %kernel, i32 %kn, i32 %y, i32 %x, i32 %size_x, i32 %size_y, float %scale)"
+	},
+	"graph":[
+		{
+			"nodes":[
+				{
+					"_id":89233856,
+					"attributes":{
+						"ir":[
+							"  %div = sdiv i32 %kn, 2",
+							"  %sub = sub nsw i32 0, %div",
+							"  %cmp19 = icmp slt i32 %div, %sub",
+							"  br i1 %cmp19, label %for.end18, label %for.cond2.preheader.lr.ph"
+						],
+						"labels":[
+							0
+						],
+						"name":"entry"
+					}
+				},
+				{
+					"_id":89252544,
+					"attributes":{
+						"ir":[
+							"  %cmp315 = icmp slt i32 %div, %sub",
+							"  %0 = sub i32 0, %div",
+							"  %1 = sext i32 %0 to i64",
+							"  %2 = sext i32 %div to i64",
+							"  br label %for.cond2.preheader"
+						],
+						"labels":[
+							3
+						],
+						"name":"for.cond2.preheader.lr.ph"
+					}
+				},
+				{
+					"_id":89255200,
+					"attributes":{
+						"ir":[
+							"  %j.021 = phi i32 [ %sub, %for.cond2.preheader.lr.ph ], [ %inc17, %for.inc16 ]",
+							"  %pixel.020 = phi float [ 0.000000e+00, %for.cond2.preheader.lr.ph ], [ %pixel.1.lcssa, %for.inc16 ]",
+							"  br i1 %cmp315, label %for.inc16, label %for.body4.lr.ph"
+						],
+						"labels":[
+							2,
+							6
+						],
+						"name":"for.cond2.preheader"
+					}
+				},
+				{
+					"_id":89272352,
+					"attributes":{
+						"ir":[
+							"  %sub5 = sub nsw i32 %y, %j.021",
+							"  %mul = mul nsw i32 %sub5, %size_x",
+							"  %add = add nsw i32 %mul, %x",
+							"  %mul8 = mul nsw i32 %j.021, %kn",
+							"  %add10 = sub i32 2, %mul8",
+							"  br label %for.body4"
+						],
+						"labels":[
+							3,
+							6
+						],
+						"name":"for.body4.lr.ph"
+					}
+				},
+				{
+					"_id":89272864,
+					"attributes":{
+						"ir":[
+							"  %indvars.iv = phi i64 [ %indvars.iv.next, %for.body4 ], [ %1, %for.body4.lr.ph ]",
+							"  %i.0.neg18 = phi i32 [ %i.0.neg, %for.body4 ], [ %div, %for.body4.lr.ph ]",
+							"  %pixel.116 = phi float [ %add15, %for.body4 ], [ %pixel.020, %for.body4.lr.ph ]",
+							"  %sub6 = add i32 %add, %i.0.neg18",
+							"  %idxprom = sext i32 %sub6 to i64",
+							"  %arrayidx = getelementptr inbounds i8* %in, i64 %idxprom",
+							"  %3 = load i8* %arrayidx, align 1",
+							"  %conv = zext i8 %3 to i32",
+							"  %conv7 = sitofp i32 %conv to float",
+							"  %sub11 = add i32 %add10, %i.0.neg18",
+							"  %idxprom12 = sext i32 %sub11 to i64",
+							"  %arrayidx13 = getelementptr inbounds float* %kernel, i64 %idxprom12",
+							"  %4 = load float* %arrayidx13, align 4",
+							"  %mul14 = fmul float %4, %conv7",
+							"  %add15 = fadd float %pixel.116, %mul14",
+							"  %indvars.iv.next = add nsw i64 %indvars.iv, 1",
+							"  %5 = trunc i64 %indvars.iv to i32",
+							"  %i.0.neg = xor i32 %5, -1",
+							"  %cmp3 = icmp slt i64 %indvars.iv, %2",
+							"  br i1 %cmp3, label %for.body4, label %for.inc16.loopexit"
+						],
+						"labels":[
+							2,
+							4,
+							6
+						],
+						"name":"for.body4"
+					}
+				},
+				{
+					"_id":89270080,
+					"attributes":{
+						"ir":[
+							"  %add15.lcssa = phi float [ %add15, %for.body4 ]",
+							"  br label %for.inc16"
+						],
+						"labels":[
+							5,
+							6
+						],
+						"name":"for.inc16.loopexit"
+					}
+				},
+				{
+					"_id":89264816,
+					"attributes":{
+						"ir":[
+							"  %pixel.1.lcssa = phi float [ %pixel.020, %for.cond2.preheader ], [ %add15.lcssa, %for.inc16.loopexit ]",
+							"  %inc17 = add nsw i32 %j.021, 1",
+							"  %cmp = icmp slt i32 %j.021, %div",
+							"  br i1 %cmp, label %for.cond2.preheader, label %for.end18.loopexit"
+						],
+						"labels":[
+							4,
+							6
+						],
+						"name":"for.inc16"
+					}
+				},
+				{
+					"_id":89271232,
+					"attributes":{
+						"ir":[
+							"  %pixel.1.lcssa.lcssa = phi float [ %pixel.1.lcssa, %for.inc16 ]",
+							"  br label %for.end18"
+						],
+						"labels":[
+							5
+						],
+						"name":"for.end18.loopexit"
+					}
+				},
+				{
+					"_id":89236688,
+					"attributes":{
+						"ir":[
+							"  %pixel.0.lcssa = phi float [ 0.000000e+00, %entry ], [ %pixel.1.lcssa.lcssa, %for.end18.loopexit ]",
+							"  %div19 = fdiv float %pixel.0.lcssa, %scale",
+							"  %conv20 = fptoui float %div19 to i8",
+							"  %mul21 = mul nsw i32 %size_x, %y",
+							"  %add22 = add nsw i32 %mul21, %x",
+							"  %idxprom23 = sext i32 %add22 to i64",
+							"  %arrayidx24 = getelementptr inbounds i8* %out, i64 %idxprom23",
+							"  store i8 %conv20, i8* %arrayidx24, align 1",
+							"  ret void"
+						],
+						"labels":[
+							1
+						],
+						"name":"for.end18"
+					}
+				}
+			]
+		},
+		{
+			"edges":[
+				{
+					"dst":89236688,
+					"src":89233856
+				},
+				{
+					"dst":89252544,
+					"src":89233856
+				},
+				{
+					"dst":89255200,
+					"src":89252544
+				},
+				{
+					"dst":89264816,
+					"src":89255200
+				},
+				{
+					"dst":89272352,
+					"src":89255200
+				},
+				{
+					"dst":89255200,
+					"src":89264816
+				},
+				{
+					"dst":89271232,
+					"src":89264816
+				},
+				{
+					"dst":89236688,
+					"src":89271232
+				},
+				{
+					"dst":89272864,
+					"src":89272352
+				},
+				{
+					"dst":89272864,
+					"src":89272864
+				},
+				{
+					"dst":89270080,
+					"src":89272864
+				},
+				{
+					"dst":89264816,
+					"src":89270080
+				}
+			]
+		}
+	],
+	"name":"filter_kernel_2d1_1darr"
+}
