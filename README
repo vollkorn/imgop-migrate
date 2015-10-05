@@ -1,13 +1,10 @@
 
+# Building
 
+```bash
 mkdir build
 cd build
 
-#Build with
-
-C=/usr/bin/clang CXX=/usr/bin/clang++ cmake -DLLVM_DIR=$LLVM_INSTALL_DIR/share/llvm/cmake ../optmigrate/
-
-# or
-
-C=gcc CXX=g++ cmake -DLLVM_DIR=$LLVM_INSTALL_DIR/share/llvm/cmake ../optmigrate
+C=clang CXX=clang++ cmake -DLLVM_DIR=$LLVM_INSTALL_DIR/share/llvm/cmake ../optmigrate/
+```
 
