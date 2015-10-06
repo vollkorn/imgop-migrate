@@ -1,10 +1,21 @@
 
 # Building
 
-```bash
-mkdir build
-cd build
+$ mkdir build
+$ cd build
 
-C=clang CXX=clang++ cmake -DLLVM_DIR=$LLVM_INSTALL_DIR/share/llvm/cmake ../optmigrate/
-```
+$ C=clang CXX=clang++ cmake -DLLVM_DIR=$LLVM_INSTALL_DIR/share/llvm/cmake ../optmigrate/
+
+
+# Using 
+
+$ opt -load /path/to/lib/optmigrate.so -optmigrate -patterndb input.bc -o output.bc
+
+-patterndb: path to pattern database file
+
+-serialize-pattern: creates new pattern file which can be added to the database
+
+-show-graphs: show intermediate result graphs
+
+-match-cfg-ony: only search for matching control flow graphs
 
